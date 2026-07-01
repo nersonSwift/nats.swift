@@ -14,6 +14,10 @@
 import Foundation
 import XCTest
 
+#if canImport(Glibc)
+    import Glibc
+#endif
+
 public class NatsServer {
     public var port: Int? { return natsServerPort }
     public var clientURL: String {
@@ -107,7 +111,11 @@ public class NatsServer {
                 if ready || errorLine != nil || lineCount >= maxLines {
                     serverError = errorLine
                     semaphore.signal()
-                    outputHandle.readabilityHandler = nil
+                    outputHandle.readabilityHandler = { handle in
+                        if handle.availableData.isEmpty {
+                            handle.readabilityHandler = nil
+                        }
+                    }
                     return
                 }
             }
@@ -135,13 +143,17 @@ public class NatsServer {
     }
 
     public func stop() {
-        if process == nil {
+        guard let process else {
             return
         }
 
-        self.process?.terminate()
-        process?.waitUntilExit()
-        process = nil
+        (process.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+        kill(process.processIdentifier, SIGKILL)
+        let deadline = Date().addingTimeInterval(5)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.005)
+        }
+        self.process = nil
         natsServerPort = port
         tlsEnabled = false
     }

@@ -29,6 +29,7 @@ class HeadersTests: XCTestCase {
             "testInvalidNatsHeaderNameWithSpecialCharacters",
             testInvalidNatsHeaderNameWithSpecialCharacters
         ),
+        ("testToDictionary", testToDictionary),
 
     ]
 
@@ -93,5 +94,17 @@ class HeadersTests: XCTestCase {
         // Test removal of a value
         hm[try! NatsHeaderName("foo")] = nil
         XCTAssertNil(hm[try! NatsHeaderName("foo")])
+    }
+
+    func testToDictionary() {
+        var hm = NatsHeaderMap()
+        hm.insert(try! NatsHeaderName("single"), NatsHeaderValue("one"))
+        hm.append(try! NatsHeaderName("multi"), NatsHeaderValue("first"))
+        hm.append(try! NatsHeaderName("multi"), NatsHeaderValue("second"))
+
+        let dict = hm.toDictionary()
+
+        XCTAssertEqual(dict["single"], "one")
+        XCTAssertEqual(dict["multi"], "first")
     }
 }

@@ -17,7 +17,7 @@ import Logging
 import NIO
 import NIOFoundationCompat
 
-public class NatsClientOptions {
+public final class NatsClientOptions {
     private var urls: [URL] = []
     private var pingInterval: TimeInterval = 60.0
     private var reconnectWait: TimeInterval = 2.0

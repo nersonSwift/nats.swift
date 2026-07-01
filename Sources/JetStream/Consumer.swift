@@ -11,24 +11,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import CryptoKit
 import Foundation
+import NIOConcurrencyHelpers
 import Nuid
 
-public class Consumer {
+#if canImport(CryptoKit)
+    import CryptoKit
+#else
+    import Crypto
+#endif
 
-    private static var rdigits: [UInt8] = Array(
+public final class Consumer: Sendable {
+
+    private static let rdigits: [UInt8] = Array(
         "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".utf8)
 
+    private let _info: NIOLockedValueBox<ConsumerInfo>
     /// Contains information about the consumer.
     /// Note that this may be out of date and reading it does not query the server.
     /// For up-to-date stream info use ``Consumer/info()``
-    public internal(set) var info: ConsumerInfo
+    public var info: ConsumerInfo { _info.withLockedValue { $0 } }
     internal let ctx: JetStreamContext
 
     init(ctx: JetStreamContext, info: ConsumerInfo) {
         self.ctx = ctx
-        self.info = info
+        self._info = NIOLockedValueBox(info)
     }
 
     /// Retrieves information about the consumer
@@ -44,7 +51,7 @@ public class Consumer {
         let info: Response<ConsumerInfo> = try await ctx.request(subj)
         switch info {
         case .success(let info):
-            self.info = info
+            _info.withLockedValue { $0 = info }
             return info
         case .error(let apiResponse):
             throw apiResponse.error

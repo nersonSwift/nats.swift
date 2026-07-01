@@ -11,16 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import Combine
 import Foundation
+import NIOConcurrencyHelpers
 import Nats
 import Nuid
 
 /// A context which can perform jetstream scoped requests.
-public class JetStreamContext {
-    internal var client: NatsClient
-    private var prefix: String = "$JS.API"
-    private var timeout: TimeInterval = 5.0
+public final class JetStreamContext: Sendable {
+    internal let client: NatsClient
+    private let prefix: String
+    private let _timeout: NIOLockedValueBox<TimeInterval>
+    private var timeout: TimeInterval {
+        get { _timeout.withLockedValue { $0 } }
+        set { _timeout.withLockedValue { $0 = newValue } }
+    }
 
     /// Creates a JetStreamContext from ``NatsClient`` with optional custom prefix and timeout.
     ///
@@ -31,7 +35,7 @@ public class JetStreamContext {
     public init(client: NatsClient, prefix: String = "$JS.API", timeout: TimeInterval = 5.0) {
         self.client = client
         self.prefix = prefix
-        self.timeout = timeout
+        self._timeout = NIOLockedValueBox(timeout)
     }
 
     /// Creates a JetStreamContext from ``NatsClient`` with custom domain and timeout.
@@ -43,15 +47,7 @@ public class JetStreamContext {
     public init(client: NatsClient, domain: String, timeout: TimeInterval = 5.0) {
         self.client = client
         self.prefix = "$JS.\(domain).API"
-        self.timeout = timeout
-    }
-
-    /// Creates a JetStreamContext from ``NatsClient``
-    ///
-    /// - Parameters:
-    ///  - client: NATS client connection.
-    public init(client: NatsClient) {
-        self.client = client
+        self._timeout = NIOLockedValueBox(timeout)
     }
 
     /// Sets a custom timeout for JetStream API requests.

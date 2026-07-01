@@ -121,6 +121,18 @@ public struct NatsHeaderMap: Equatable, Sendable {
         return inner[name] ?? []
     }
 
+    /// Returns the headers as a plain string map, keeping the first value for any
+    /// header that has multiple values. Use ``getAll(_:)`` to read every value.
+    public func toDictionary() -> [String: String] {
+        var result: [String: String] = [:]
+        for (name, values) in inner {
+            if let first = values.first {
+                result[name.description] = first.description
+            }
+        }
+        return result
+    }
+
     //TODO(jrm): can we use unsafe methods here? Probably yes.
     func toBytes() -> [UInt8] {
         var bytes: [UInt8] = []

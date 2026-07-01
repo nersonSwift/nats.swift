@@ -22,6 +22,21 @@ jobs:
       run: xcodebuild build -scheme Nats -destination 'platform=macOS,arch=arm64'
     - name: Test
       run: swift test
+  linux:
+    runs-on: ubuntu-latest
+    container: swift:6.2-noble
+    steps:
+    - name: Checkout the code
+      uses: actions/checkout@v4
+    - name: Install nats-server
+      run: |
+        NATS_SERVER_VERSION=2.10.22
+        arch="$(dpkg --print-architecture)"
+        curl -sSL "https://github.com/nats-io/nats-server/releases/download/v${NATS_SERVER_VERSION}/nats-server-v${NATS_SERVER_VERSION}-linux-${arch}.tar.gz" | tar -xz -C /tmp
+        install -m 0755 "/tmp/nats-server-v${NATS_SERVER_VERSION}-linux-${arch}/nats-server" /usr/local/bin/nats-server
+        nats-server --version
+    - name: Build
+      run: swift build
   ios:
     runs-on: macos-15
     steps:
