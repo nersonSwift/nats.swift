@@ -11,32 +11,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import XCTest
+import Foundation
+import Testing
 
 @testable import Nats
 
-class ErrorsTests: XCTestCase {
+@Suite struct ErrorsTests {
 
-    static var allTests = [
-        ("testServerErrorPermissionsDenied", testServerErrorPermissionsDenied)
-    ]
-
-    func testServerErrorPermissionsDenied() {
+    @Test func testServerErrorPermissionsDenied() {
         var err = NatsError.ServerError(
             "Permissions Violation for Subscription to \"events.A.B.*\"]")
-        XCTAssertEqual(
-            err, NatsError.ServerError.permissionsViolation(.subscribe, "events.A.B.*", nil))
+        #expect(
+            err == NatsError.ServerError.permissionsViolation(.subscribe, "events.A.B.*", nil))
 
         err = NatsError.ServerError("Permissions Violation for Publish to \"events.A.B.*\"")
-        XCTAssertEqual(
-            err, NatsError.ServerError.permissionsViolation(.publish, "events.A.B.*", nil))
+        #expect(
+            err == NatsError.ServerError.permissionsViolation(.publish, "events.A.B.*", nil))
 
         err = NatsError.ServerError(
             "Permissions Violation for Publish to \"events.A.B.*\" using queue \"q\"")
-        XCTAssertEqual(
-            err, NatsError.ServerError.permissionsViolation(.publish, "events.A.B.*", "q"))
+        #expect(
+            err == NatsError.ServerError.permissionsViolation(.publish, "events.A.B.*", "q"))
 
         err = NatsError.ServerError("Some other error")
-        XCTAssertEqual(err, NatsError.ServerError.proto("Some other error"))
+        #expect(err == NatsError.ServerError.proto("Some other error"))
     }
 }

@@ -15,59 +15,52 @@ import Foundation
 import Logging
 import Nats
 import NatsServer
-import XCTest
+import Testing
 
-class TestNatsEvents: XCTestCase {
-
-    static var allTests = [
-        ("testClientConnectedEvent", testClientConnectedEvent),
-        ("testClientClosedEvent", testClientClosedEvent),
-        ("testClientReconnectEvent", testClientReconnectEvent),
-    ]
+@Suite(.serialized) final class NatsEventsTests {
 
     var natsServer = NatsServer()
 
-    override func tearDown() {
-        super.tearDown()
+    deinit {
         natsServer.stop()
     }
 
+    @Test(.timeLimit(.minutes(1)))
     func testClientConnectedEvent() async throws {
         natsServer.start()
         logger.logLevel = .critical
 
         let client = NatsClientOptions().url(URL(string: natsServer.clientURL)!).build()
 
-        let expectation = XCTestExpectation(
-            description: "client was not notified of connection established event")
-        client.on(.connected) { event in
-            XCTAssertEqual(event.kind(), NatsEventKind.connected)
-            expectation.fulfill()
+        try await confirmation("client was not notified of connection established event") {
+            connected in
+            client.on(.connected) { event in
+                #expect(event.kind() == NatsEventKind.connected)
+                connected()
+            }
+            try await client.connect()
         }
-        try await client.connect()
-
-        await fulfillment(of: [expectation], timeout: 1.0)
         try await client.close()
     }
 
+    @Test(.timeLimit(.minutes(1)))
     func testClientClosedEvent() async throws {
         natsServer.start()
         logger.logLevel = .critical
 
         let client = NatsClientOptions().url(URL(string: natsServer.clientURL)!).build()
 
-        let expectation = XCTestExpectation(
-            description: "client was not notified of connection closed event")
-        client.on(.closed) { event in
-            XCTAssertEqual(event.kind(), NatsEventKind.closed)
-            expectation.fulfill()
+        try await confirmation("client was not notified of connection closed event") { closed in
+            client.on(.closed) { event in
+                #expect(event.kind() == NatsEventKind.closed)
+                closed()
+            }
+            try await client.connect()
+            try await client.close()
         }
-        try await client.connect()
-
-        try await client.close()
-        await fulfillment(of: [expectation], timeout: 1.0)
     }
 
+    @Test(.timeLimit(.minutes(1)))
     func testClientReconnectEvent() async throws {
         natsServer.start()
         let port = natsServer.port!
@@ -78,25 +71,35 @@ class TestNatsEvents: XCTestCase {
             .reconnectWait(1)
             .build()
 
-        let disconnected = XCTestExpectation(
-            description: "client was not notified of disconnection event")
-        client.on(.disconnected) { event in
-            XCTAssertEqual(event.kind(), NatsEventKind.disconnected)
-            disconnected.fulfill()
-        }
         try await client.connect()
-        natsServer.stop()
 
-        let reconnected = XCTestExpectation(
-            description: "client was not notified of reconnection event")
-        client.on(.connected) { event in
-            XCTAssertEqual(event.kind(), NatsEventKind.connected)
-            reconnected.fulfill()
+        try await confirmation("client was not notified of disconnection event") { disconnected in
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let once = ResumeOnce()
+                client.on(.disconnected) { event in
+                    once.run {
+                        #expect(event.kind() == NatsEventKind.disconnected)
+                        disconnected()
+                        continuation.resume()
+                    }
+                }
+                natsServer.stop()
+            }
         }
-        await fulfillment(of: [disconnected], timeout: 5.0)
 
-        natsServer.start(port: port)
-        await fulfillment(of: [reconnected], timeout: 5.0)
+        try await confirmation("client was not notified of reconnection event") { reconnected in
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let once = ResumeOnce()
+                client.on(.connected) { event in
+                    once.run {
+                        #expect(event.kind() == NatsEventKind.connected)
+                        reconnected()
+                        continuation.resume()
+                    }
+                }
+                natsServer.start(port: port)
+            }
+        }
 
         try await client.close()
     }

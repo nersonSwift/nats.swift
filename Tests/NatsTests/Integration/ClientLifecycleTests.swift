@@ -13,12 +13,13 @@
 
 import Foundation
 import NatsServer
-import XCTest
+import Testing
 
 @testable import Nats
 
-class ClientLifecycleTests: XCTestCase {
+@Suite(.serialized) struct ClientLifecycleTests {
 
+    @Test(.timeLimit(.minutes(1)))
     func testAbandonedReconnectingClientIsReleased() async throws {
         logger.logLevel = .critical
         let server = NatsServer()
@@ -36,9 +37,10 @@ class ClientLifecycleTests: XCTestCase {
         for _ in 0..<100 where weakHandler != nil {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
-        XCTAssertNil(weakHandler, "abandoned reconnecting client was leaked")
+        #expect(weakHandler == nil, "abandoned reconnecting client was leaked")
     }
 
+    @Test(.timeLimit(.minutes(1)))
     func testClientReleasedAfterMaxReconnectsGiveUp() async throws {
         logger.logLevel = .critical
         let server = NatsServer()
@@ -65,9 +67,10 @@ class ClientLifecycleTests: XCTestCase {
         for _ in 0..<100 where weakHandler != nil {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
-        XCTAssertNil(weakHandler, "client leaked after maxReconnects give-up")
+        #expect(weakHandler == nil, "client leaked after maxReconnects give-up")
     }
 
+    @Test(.timeLimit(.minutes(1)))
     func testClientWithActiveSubscriptionIsReleased() async throws {
         logger.logLevel = .critical
         let server = NatsServer()
@@ -87,9 +90,10 @@ class ClientLifecycleTests: XCTestCase {
         for _ in 0..<100 where weakHandler != nil {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
-        XCTAssertNil(weakHandler, "client with an active subscription was leaked")
+        #expect(weakHandler == nil, "client with an active subscription was leaked")
     }
 
+    @Test(.timeLimit(.minutes(1)))
     func testActiveSubscriptionEndsOnMaxReconnectsGiveUp() async throws {
         logger.logLevel = .critical
         let server = NatsServer()
@@ -107,19 +111,6 @@ class ClientLifecycleTests: XCTestCase {
         // Drop the server so the client exhausts maxReconnects and gives up while the
         // subscription is still held: its iterator must terminate rather than hang.
         server.stop()
-        let finished = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                do { for try await _ in sub {} } catch {}
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
-                return false
-            }
-            let first = await group.next() ?? false
-            group.cancelAll()
-            return first
-        }
-        XCTAssertTrue(finished, "subscription iterator did not end after maxReconnects give-up")
+        for try await _ in sub {}
     }
 }

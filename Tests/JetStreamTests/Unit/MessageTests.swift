@@ -11,23 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import XCTest
+import Foundation
+import Testing
 
 @testable import JetStream
 @testable import Nats
 
-class JetStreamMessageTests: XCTestCase {
+@Suite struct JetStreamMessageTests {
 
-    static var allTests = [
-        ("testValidOldFormatMessage", testValidOldFormatMessage),
-        ("testValidNewFormatMessage", testValidNewFormatMessage),
-        ("testMissingTokens", testMissingTokens),
-        ("testInvalidTokenValues", testInvalidTokenValues),
-        ("testInvalidPrefix", testInvalidPrefix),
-        ("testNoReplySubject", testNoReplySubject),
-    ]
-
-    func testValidOldFormatMessage() async throws {
+    @Test func testValidOldFormatMessage() async throws {
         let replySubject = "$JS.ACK.myStream.myConsumer.10.20.30.1234567890.5"
         let natsMessage = NatsMessage(
             payload: nil, subject: "", replySubject: replySubject, length: 0, headers: nil,
@@ -36,18 +28,18 @@ class JetStreamMessageTests: XCTestCase {
 
         let metadata = try jetStreamMessage.metadata()
 
-        XCTAssertNil(metadata.domain)
-        XCTAssertNil(metadata.accountHash)
-        XCTAssertEqual(metadata.stream, "myStream")
-        XCTAssertEqual(metadata.consumer, "myConsumer")
-        XCTAssertEqual(metadata.delivered, 10)
-        XCTAssertEqual(metadata.streamSequence, 20)
-        XCTAssertEqual(metadata.consumerSequence, 30)
-        XCTAssertEqual(metadata.timestamp, "1234567890")
-        XCTAssertEqual(metadata.pending, 5)
+        #expect(metadata.domain == nil)
+        #expect(metadata.accountHash == nil)
+        #expect(metadata.stream == "myStream")
+        #expect(metadata.consumer == "myConsumer")
+        #expect(metadata.delivered == 10)
+        #expect(metadata.streamSequence == 20)
+        #expect(metadata.consumerSequence == 30)
+        #expect(metadata.timestamp == "1234567890")
+        #expect(metadata.pending == 5)
     }
 
-    func testValidNewFormatMessage() async throws {
+    @Test func testValidNewFormatMessage() async throws {
         let replySubject = "$JS.ACK.domain.accountHash123.myStream.myConsumer.10.20.30.1234567890.5"
         let natsMessage = NatsMessage(
             payload: nil, subject: "", replySubject: replySubject, length: 0, headers: nil,
@@ -55,18 +47,18 @@ class JetStreamMessageTests: XCTestCase {
         let jetStreamMessage = JetStreamMessage(message: natsMessage, client: NatsClient())
         let metadata = try jetStreamMessage.metadata()
 
-        XCTAssertEqual(metadata.domain, "domain")
-        XCTAssertEqual(metadata.accountHash, "accountHash123")
-        XCTAssertEqual(metadata.stream, "myStream")
-        XCTAssertEqual(metadata.consumer, "myConsumer")
-        XCTAssertEqual(metadata.delivered, 10)
-        XCTAssertEqual(metadata.streamSequence, 20)
-        XCTAssertEqual(metadata.consumerSequence, 30)
-        XCTAssertEqual(metadata.timestamp, "1234567890")
-        XCTAssertEqual(metadata.pending, 5)
+        #expect(metadata.domain == "domain")
+        #expect(metadata.accountHash == "accountHash123")
+        #expect(metadata.stream == "myStream")
+        #expect(metadata.consumer == "myConsumer")
+        #expect(metadata.delivered == 10)
+        #expect(metadata.streamSequence == 20)
+        #expect(metadata.consumerSequence == 30)
+        #expect(metadata.timestamp == "1234567890")
+        #expect(metadata.pending == 5)
     }
 
-    func testMissingTokens() async throws {
+    @Test func testMissingTokens() async throws {
         let replySubject = "$JS.ACK.myStream.myConsumer"
         let natsMessage = NatsMessage(
             payload: nil, subject: "", replySubject: replySubject, length: 0, headers: nil,
@@ -79,7 +71,7 @@ class JetStreamMessageTests: XCTestCase {
         }
     }
 
-    func testInvalidTokenValues() async throws {
+    @Test func testInvalidTokenValues() async throws {
         let replySubject = "$JS.ACK.myStream.myConsumer.invalid.20.30.1234567890.5"
         let natsMessage = NatsMessage(
             payload: nil, subject: "", replySubject: replySubject, length: 0, headers: nil,
@@ -92,7 +84,7 @@ class JetStreamMessageTests: XCTestCase {
         }
     }
 
-    func testInvalidPrefix() async throws {
+    @Test func testInvalidPrefix() async throws {
         let replySubject = "$JS.WRONG.myStream.myConsumer.10.20.30.1234567890.5"
         let natsMessage = NatsMessage(
             payload: nil, subject: "", replySubject: replySubject, length: 0, headers: nil,
@@ -105,7 +97,7 @@ class JetStreamMessageTests: XCTestCase {
         }
     }
 
-    func testNoReplySubject() async throws {
+    @Test func testNoReplySubject() async throws {
         let natsMessage = NatsMessage(
             payload: nil, subject: "", replySubject: nil, length: 0, headers: nil, status: nil,
             description: nil)

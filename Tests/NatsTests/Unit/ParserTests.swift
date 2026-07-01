@@ -11,25 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import XCTest
+import Foundation
+import Testing
 
 @testable import Nats
 
-class ParserTests: XCTestCase {
+@Suite struct ParserTests {
 
-    static var allTests = [
-        ("testParseOutMessages", testParseOutMessages)
-    ]
-
-    override func setUp() {
-        super.setUp()
-    }
-
-    override func tearDown() {
-        super.tearDown()
-    }
-
-    func testParseOutMessages() {
+    @Test func testParseOutMessages() {
         struct TestCase {
             let name: String
             let givenChunks: [String]
@@ -204,47 +193,47 @@ class ParserTests: XCTestCase {
                 prevRemainder = res.remainder
                 ops.append(contentsOf: res.ops)
             }
-            XCTAssertEqual(ops.count, tc.expectedOps.count)
+            #expect(ops.count == tc.expectedOps.count)
             for (i, op) in ops.enumerated() {
                 switch op {
                 case .ok:
                     if case .ok = tc.expectedOps[i] {
                     } else {
-                        XCTFail(fail(tn, tc.name))
+                        Issue.record("\(fail(tn, tc.name))")
                     }
                 case .info(let info):
                     if case .info(let expectedInfo) = tc.expectedOps[i] {
-                        XCTAssertEqual(info, expectedInfo, fail(tn, tc.name))
+                        #expect(info == expectedInfo, "\(fail(tn, tc.name))")
                     } else {
-                        XCTFail(fail(tn, tc.name))
+                        Issue.record("\(fail(tn, tc.name))")
                     }
 
                 case .ping:
                     if case .ping = tc.expectedOps[i] {
                     } else {
-                        XCTFail(fail(tn, tc.name))
+                        Issue.record("\(fail(tn, tc.name))")
                     }
                 case .pong:
                     if case .pong = tc.expectedOps[i] {
                     } else {
-                        XCTFail(fail(tn, tc.name))
+                        Issue.record("\(fail(tn, tc.name))")
                     }
                 case .error(_):
                     if case .error(_) = tc.expectedOps[i] {
                     } else {
-                        XCTFail(fail(tn, tc.name))
+                        Issue.record("\(fail(tn, tc.name))")
                     }
                 case .message(let msg):
                     if case .message(let expectedMessage) = tc.expectedOps[i] {
-                        XCTAssertEqual(msg, expectedMessage, fail(tn, tc.name))
+                        #expect(msg == expectedMessage, "\(fail(tn, tc.name))")
                     } else {
-                        XCTFail(fail(tn, tc.name))
+                        Issue.record("\(fail(tn, tc.name))")
                     }
                 case .hMessage(let msg):
                     if case .hMessage(let expectedMessage) = tc.expectedOps[i] {
-                        XCTAssertEqual(msg, expectedMessage, fail(tn, tc.name))
+                        #expect(msg == expectedMessage, "\(fail(tn, tc.name))")
                     } else {
-                        XCTFail(fail(tn, tc.name))
+                        Issue.record("\(fail(tn, tc.name))")
                     }
                 }
             }

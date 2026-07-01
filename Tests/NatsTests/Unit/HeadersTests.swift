@@ -11,43 +11,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import XCTest
+import Foundation
+import Testing
 
 @testable import Nats
 
-class HeadersTests: XCTestCase {
+@Suite struct HeadersTests {
 
-    static var allTests = [
-        ("testAppend", testAppend),
-        ("testSubscript", testSubscript),
-        ("testInsert", testInsert),
-        ("testSerialize", testSerialize),
-        ("testValidNatsHeaderName", testValidNatsHeaderName),
-        ("testDollarNatsHeaderName", testDollarNatsHeaderName),
-        ("testInvalidNatsHeaderName", testInvalidNatsHeaderName),
-        (
-            "testInvalidNatsHeaderNameWithSpecialCharacters",
-            testInvalidNatsHeaderNameWithSpecialCharacters
-        ),
-        ("testToDictionary", testToDictionary),
-
-    ]
-
-    func testAppend() {
+    @Test func testAppend() {
         var hm = NatsHeaderMap()
         hm.append(try! NatsHeaderName("foo"), NatsHeaderValue("bar"))
         hm.append(try! NatsHeaderName("foo"), NatsHeaderValue("baz"))
-        XCTAssertEqual(
-            hm.getAll(try! NatsHeaderName("foo")), [NatsHeaderValue("bar"), NatsHeaderValue("baz")])
+        #expect(
+            hm.getAll(try! NatsHeaderName("foo")) == [
+                NatsHeaderValue("bar"), NatsHeaderValue("baz"),
+            ])
     }
 
-    func testInsert() {
+    @Test func testInsert() {
         var hm = NatsHeaderMap()
         hm.insert(try! NatsHeaderName("foo"), NatsHeaderValue("bar"))
-        XCTAssertEqual(hm.getAll(try! NatsHeaderName("foo")), [NatsHeaderValue("bar")])
+        #expect(hm.getAll(try! NatsHeaderName("foo")) == [NatsHeaderValue("bar")])
     }
 
-    func testSerialize() {
+    @Test func testSerialize() {
         var hm = NatsHeaderMap()
         hm.append(try! NatsHeaderName("foo"), NatsHeaderValue("bar"))
         hm.append(try! NatsHeaderName("foo"), NatsHeaderValue("baz"))
@@ -58,45 +45,45 @@ class HeadersTests: XCTestCase {
             "NATS/1.0\r\nbar:foo\r\nfoo:bar\r\nfoo:baz\r\n\r\n",
         ]
 
-        XCTAssertTrue(expected.contains(String(bytes: hm.toBytes(), encoding: .utf8)!))
+        #expect(expected.contains(String(bytes: hm.toBytes(), encoding: .utf8)!))
     }
 
-    func testValidNatsHeaderName() {
-        XCTAssertNoThrow(try NatsHeaderName("X-Custom-Header"))
+    @Test func testValidNatsHeaderName() {
+        #expect(throws: Never.self) { try NatsHeaderName("X-Custom-Header") }
     }
 
-    func testDollarNatsHeaderName() {
-        XCTAssertNoThrow(try NatsHeaderName("$Dollar"))
+    @Test func testDollarNatsHeaderName() {
+        #expect(throws: Never.self) { try NatsHeaderName("$Dollar") }
     }
 
-    func testInvalidNatsHeaderName() {
-        XCTAssertThrowsError(try NatsHeaderName("Invalid Header Name"))
+    @Test func testInvalidNatsHeaderName() {
+        #expect(throws: (any Error).self) { try NatsHeaderName("Invalid Header Name") }
     }
 
-    func testInvalidNatsHeaderNameWithSpecialCharacters() {
-        XCTAssertThrowsError(try NatsHeaderName("Invalid:Header:Name"))
+    @Test func testInvalidNatsHeaderNameWithSpecialCharacters() {
+        #expect(throws: (any Error).self) { try NatsHeaderName("Invalid:Header:Name") }
     }
 
-    func testSubscript() {
+    @Test func testSubscript() {
         var hm = NatsHeaderMap()
 
         // Test setting a value
         hm[try! NatsHeaderName("foo")] = NatsHeaderValue("bar")
-        XCTAssertEqual(hm[try! NatsHeaderName("foo")], NatsHeaderValue("bar"))
+        #expect(hm[try! NatsHeaderName("foo")] == NatsHeaderValue("bar"))
 
         // Test updating existing value
         hm[try! NatsHeaderName("foo")] = NatsHeaderValue("baz")
-        XCTAssertEqual(hm[try! NatsHeaderName("foo")], NatsHeaderValue("baz"))
+        #expect(hm[try! NatsHeaderName("foo")] == NatsHeaderValue("baz"))
 
         // Test retrieving non-existing value (should be nil or default)
-        XCTAssertNil(hm[try! NatsHeaderName("non-existing")])
+        #expect(hm[try! NatsHeaderName("non-existing")] == nil)
 
         // Test removal of a value
         hm[try! NatsHeaderName("foo")] = nil
-        XCTAssertNil(hm[try! NatsHeaderName("foo")])
+        #expect(hm[try! NatsHeaderName("foo")] == nil)
     }
 
-    func testToDictionary() {
+    @Test func testToDictionary() {
         var hm = NatsHeaderMap()
         hm.insert(try! NatsHeaderName("single"), NatsHeaderValue("one"))
         hm.append(try! NatsHeaderName("multi"), NatsHeaderValue("first"))
@@ -104,7 +91,7 @@ class HeadersTests: XCTestCase {
 
         let dict = hm.toDictionary()
 
-        XCTAssertEqual(dict["single"], "one")
-        XCTAssertEqual(dict["multi"], "first")
+        #expect(dict["single"] == "one")
+        #expect(dict["multi"] == "first")
     }
 }

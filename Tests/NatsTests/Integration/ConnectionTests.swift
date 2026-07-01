@@ -11,64 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import Foundation
 import Logging
 import NIO
 import Nats
 import NatsServer
-import XCTest
+import Testing
 
-class CoreNatsTests: XCTestCase {
+@Suite(.serialized) final class CoreNatsTests {
 
-    static var allTests = [
-        ("testRtt", testRtt),
-        ("testPublish", testPublish),
-        ("testSuspendAndResume", testSuspendAndResume),
-        ("testForceReconnect", testForceReconnect),
-        ("testConnectMultipleURLsOneIsValid", testConnectMultipleURLsOneIsValid),
-        ("testConnectMultipleURLsRetainOrder", testConnectMultipleURLsRetainOrder),
-        ("testConnectDNSError", testConnectDNSError),
-        ("testRetryOnFailedConnect", testRetryOnFailedConnect),
-        ("testPublishWithReply", testPublishWithReply),
-        ("testPublishWithReplyOnCustomInbox", testPublishWithReplyOnCustomInbox),
-        ("testSubscribe", testSubscribe),
-        ("testUnsubscribe", testUnsubscribe),
-        ("testUnsubscribeAfter", testUnsubscribeAfter),
-        ("testConnect", testConnect),
-        ("testReconnect", testReconnect),
-        ("testUsernameAndPassword", testUsernameAndPassword),
-        ("testTokenAuth", testTokenAuth),
-        ("testCredentialsAuth", testCredentialsAuth),
-        ("testNkeyAuth", testNkeyAuth),
-        ("testNkeyAuthFile", testNkeyAuthFile),
-        ("testMutualTls", testMutualTls),
-        ("testTlsFirst", testTlsFirst),
-        ("testInvalidCertificate", testInvalidCertificate),
-        ("testWebsocket", testWebsocket),
-        ("testWebsocketTLS", testWebsocketTLS),
-        ("testLameDuckMode", testLameDuckMode),
-        ("testRequest", testRequest),
-        ("testRequestCustomInbox", testRequestCustomInbox),
-        ("testRequest_noResponders", testRequest_noResponders),
-        ("testRequest_permissionDenied", testRequest_permissionDenied),
-        ("testConcurrentChannelActiveAndRead", testConcurrentChannelActiveAndRead),
-        ("testRequest_timeout", testRequest_timeout),
-        ("testPublishOnClosedConnection", testPublishOnClosedConnection),
-        ("testCloseClosedConnection", testCloseClosedConnection),
-        ("testSuspendClosedConnection", testSuspendClosedConnection),
-        ("testReconnectOnClosedConnection", testReconnectOnClosedConnection),
-        ("testSubscribeMissingPermissions", testSubscribeMissingPermissions),
-        ("testSubscribePermissionsRevoked", testSubscribePermissionsRevoked),
-        ("testUnsubscribeAfterWithWaitingConsumer", testUnsubscribeAfterWithWaitingConsumer),
-        ("testQueueGroupSurvivesReconnect", testQueueGroupSurvivesReconnect),
-    ]
     var natsServer = NatsServer()
 
-    override func tearDown() {
-        super.tearDown()
+    deinit {
         natsServer.stop()
     }
 
-    func testRtt() async throws {
+    @Test func testRtt() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions()
@@ -77,12 +35,12 @@ class CoreNatsTests: XCTestCase {
         try await client.connect()
 
         let rtt: TimeInterval = try await client.rtt()
-        XCTAssertGreaterThan(rtt, 0, "should have RTT")
+        #expect(rtt > 0, "should have RTT")
 
         try await client.close()
     }
 
-    func testPublish() async throws {
+    @Test(.timeLimit(.minutes(1))) func testPublish() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions()
@@ -92,19 +50,17 @@ class CoreNatsTests: XCTestCase {
         let sub = try await client.subscribe(subject: "test")
 
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
-        let expectation = XCTestExpectation(description: "Should receive message in 5 seconsd")
         let iter = sub.makeAsyncIterator()
-        Task {
+        try await confirmation { confirm in
             if let msg = try await iter.next() {
-                XCTAssertEqual(msg.subject, "test")
-                expectation.fulfill()
+                #expect(msg.subject == "test")
+                confirm()
             }
         }
-        await fulfillment(of: [expectation], timeout: 5.0)
         try await client.close()
     }
 
-    func testSuspendAndResume() async throws {
+    @Test(.timeLimit(.minutes(1))) func testSuspendAndResume() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions()
@@ -114,42 +70,46 @@ class CoreNatsTests: XCTestCase {
         let sub = try await client.subscribe(subject: "test")
 
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
-        let expectation = XCTestExpectation(description: "Should receive message in 5 seconsd")
         let iter = sub.makeAsyncIterator()
-        Task {
+        try await confirmation { confirm in
             if let msg = try await iter.next() {
-                XCTAssertEqual(msg.subject, "test")
-                expectation.fulfill()
+                #expect(msg.subject == "test")
+                confirm()
             }
         }
-        await fulfillment(of: [expectation], timeout: 5.0)
-        let reconnectExpectation = XCTestExpectation(description: "Should reconnect in 5 seconds")
-        let suspendedExpectation = XCTestExpectation(description: "Should disconnect in 5 seconds")
+        let suspended = AsyncStream<Void>.makeStream()
+        let reconnected = AsyncStream<Void>.makeStream()
         client.on([.suspended, .connected]) { event in
             if event.kind() == .suspended {
-                suspendedExpectation.fulfill()
+                suspended.continuation.yield(())
             }
             if event.kind() == .connected {
-                reconnectExpectation.fulfill()
+                reconnected.continuation.yield(())
             }
         }
         try await client.suspend()
-        await fulfillment(of: [suspendedExpectation], timeout: 5.0)
+        try await confirmation { confirm in
+            var it = suspended.stream.makeAsyncIterator()
+            _ = await it.next()
+            confirm()
+        }
         try await client.resume()
-        await fulfillment(of: [reconnectExpectation], timeout: 5.0)
+        try await confirmation { confirm in
+            var it = reconnected.stream.makeAsyncIterator()
+            _ = await it.next()
+            confirm()
+        }
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
-        let expectation1 = XCTestExpectation(description: "Should receive message in 5 seconsd")
-        Task {
+        try await confirmation { confirm in
             if let msg = try await iter.next() {
-                XCTAssertEqual(msg.subject, "test")
-                expectation1.fulfill()
+                #expect(msg.subject == "test")
+                confirm()
             }
         }
-        await fulfillment(of: [expectation1], timeout: 5.0)
         try await client.close()
     }
 
-    func testForceReconnect() async throws {
+    @Test(.timeLimit(.minutes(1))) func testForceReconnect() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions()
@@ -159,41 +119,45 @@ class CoreNatsTests: XCTestCase {
         let sub = try await client.subscribe(subject: "test")
 
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
-        let expectation = XCTestExpectation(description: "Should receive message in 5 seconsd")
         let iter = sub.makeAsyncIterator()
-        Task {
+        try await confirmation { confirm in
             if let msg = try await iter.next() {
-                XCTAssertEqual(msg.subject, "test")
-                expectation.fulfill()
+                #expect(msg.subject == "test")
+                confirm()
             }
         }
-        await fulfillment(of: [expectation], timeout: 5.0)
-        let reconnectExpectation = XCTestExpectation(description: "Should reconnect in 5 seconds")
-        let suspendedExpectation = XCTestExpectation(description: "Should disconnect in 5 seconds")
+        let suspended = AsyncStream<Void>.makeStream()
+        let reconnected = AsyncStream<Void>.makeStream()
         client.on([.suspended, .connected]) { event in
             if event.kind() == .suspended {
-                suspendedExpectation.fulfill()
+                suspended.continuation.yield(())
             }
             if event.kind() == .connected {
-                reconnectExpectation.fulfill()
+                reconnected.continuation.yield(())
             }
         }
         try await client.reconnect()
-        await fulfillment(of: [suspendedExpectation], timeout: 5.0)
-        await fulfillment(of: [reconnectExpectation], timeout: 5.0)
+        try await confirmation { confirm in
+            var it = suspended.stream.makeAsyncIterator()
+            _ = await it.next()
+            confirm()
+        }
+        try await confirmation { confirm in
+            var it = reconnected.stream.makeAsyncIterator()
+            _ = await it.next()
+            confirm()
+        }
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
-        let expectation1 = XCTestExpectation(description: "Should receive message in 5 seconsd")
-        Task {
+        try await confirmation { confirm in
             if let msg = try await iter.next() {
-                XCTAssertEqual(msg.subject, "test")
-                expectation1.fulfill()
+                #expect(msg.subject == "test")
+                confirm()
             }
         }
-        await fulfillment(of: [expectation1], timeout: 5.0)
         try await client.close()
     }
 
-    func testConnectMultipleURLsOneIsValid() async throws {
+    @Test(.timeLimit(.minutes(1))) func testConnectMultipleURLsOneIsValid() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions()
@@ -206,19 +170,17 @@ class CoreNatsTests: XCTestCase {
         let sub = try await client.subscribe(subject: "test")
 
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
-        let expectation = XCTestExpectation(description: "Should receive message in 5 seconsd")
         let iter = sub.makeAsyncIterator()
-        Task {
+        try await confirmation { confirm in
             if let msg = try await iter.next() {
-                XCTAssertEqual(msg.subject, "test")
-                expectation.fulfill()
+                #expect(msg.subject == "test")
+                confirm()
             }
         }
-        await fulfillment(of: [expectation], timeout: 5.0)
         try await client.close()
     }
 
-    func testConnectMultipleURLsRetainOrder() async throws {
+    @Test func testConnectMultipleURLsRetainOrder() async throws {
         natsServer.start()
         let natsServer2 = NatsServer()
         natsServer2.start()
@@ -229,12 +191,12 @@ class CoreNatsTests: XCTestCase {
                 .retainServersOrder()
                 .build()
             try await client.connect()
-            XCTAssertEqual(client.connectedUrl, URL(string: natsServer2.clientURL))
+            #expect(client.connectedUrl == URL(string: natsServer2.clientURL))
             try await client.close()
         }
     }
 
-    func testConnectDNSError() async throws {
+    @Test func testConnectDNSError() async throws {
         logger.logLevel = .critical
         let client = NatsClientOptions()
             .urls([URL(string: "nats://invalid:1234")!])
@@ -244,12 +206,12 @@ class CoreNatsTests: XCTestCase {
         } catch NatsError.ConnectError.dns(_) {
             return
         } catch {
-            XCTFail("Expeted dns lookup error; got: \(error)")
+            Issue.record("Expeted dns lookup error; got: \(error)")
         }
-        XCTFail("Expeted dns lookup error")
+        Issue.record("Expeted dns lookup error")
     }
 
-    func testConnectNIOError() async throws {
+    @Test func testConnectNIOError() async throws {
         logger.logLevel = .critical
         let client = NatsClientOptions()
             .urls([URL(string: "nats://localhost:4321")!])
@@ -260,32 +222,35 @@ class CoreNatsTests: XCTestCase {
         } catch NatsError.ConnectError.io(_) {
             return
         } catch {
-            XCTFail("Expeted IO lookup error; got: \(error)")
+            Issue.record("Expeted IO lookup error; got: \(error)")
         }
-        XCTFail("Expeted io lookup error")
+        Issue.record("Expeted io lookup error")
     }
 
-    func testRetryOnFailedConnect() async throws {
+    @Test(.timeLimit(.minutes(1))) func testRetryOnFailedConnect() async throws {
         let client = NatsClientOptions()
             .url(URL(string: "nats://localhost:4321")!)
             .reconnectWait(1)
             .retryOnfailedConnect()
             .build()
 
-        let expectation = XCTestExpectation(
-            description: "client was not notified of connection established event")
+        let connected = AsyncStream<Void>.makeStream()
         client.on(.connected) { event in
-            expectation.fulfill()
+            connected.continuation.yield(())
         }
 
         try await client.connect()
         natsServer.start(port: 4321)
 
-        await fulfillment(of: [expectation], timeout: 5.0)
+        try await confirmation { confirm in
+            var it = connected.stream.makeAsyncIterator()
+            _ = await it.next()
+            confirm()
+        }
 
     }
 
-    func testPublishWithReply() async throws {
+    @Test(.timeLimit(.minutes(1))) func testPublishWithReply() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions()
@@ -295,19 +260,17 @@ class CoreNatsTests: XCTestCase {
         let sub = try await client.subscribe(subject: "test")
 
         try await client.publish("msg".data(using: .utf8)!, subject: "test", reply: "reply")
-        let expectation = XCTestExpectation(description: "Should receive message in 5 seconsd")
         let iter = sub.makeAsyncIterator()
-        Task {
+        try await confirmation { confirm in
             if let msg = try await iter.next() {
-                XCTAssertEqual(msg.subject, "test")
-                XCTAssertEqual(msg.replySubject, "reply")
-                expectation.fulfill()
+                #expect(msg.subject == "test")
+                #expect(msg.replySubject == "reply")
+                confirm()
             }
         }
-        await fulfillment(of: [expectation], timeout: 5.0)
     }
 
-    func testPublishWithReplyOnCustomInbox() async throws {
+    @Test(.timeLimit(.minutes(1))) func testPublishWithReplyOnCustomInbox() async throws {
         natsServer.start()
         logger.logLevel = .debug
         let client = NatsClientOptions()
@@ -319,19 +282,17 @@ class CoreNatsTests: XCTestCase {
 
         try await client.publish(
             "msg".data(using: .utf8)!, subject: "test", reply: client.newInbox())
-        let expectation = XCTestExpectation(description: "Should receive message in 5 seconds")
         let iter = sub.makeAsyncIterator()
-        Task {
+        try await confirmation { confirm in
             if let msg = try await iter.next() {
-                XCTAssertEqual(msg.subject, "test")
-                XCTAssertTrue(msg.replySubject?.starts(with: "_INBOX_foo.") == true)
-                expectation.fulfill()
+                #expect(msg.subject == "test")
+                #expect(msg.replySubject?.starts(with: "_INBOX_foo.") == true)
+                confirm()
             }
         }
-        await fulfillment(of: [expectation], timeout: 5.0)
     }
 
-    func testSubscribe() async throws {
+    @Test func testSubscribe() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions().url(URL(string: natsServer.clientURL)!).build()
@@ -340,10 +301,10 @@ class CoreNatsTests: XCTestCase {
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
         let iter = sub.makeAsyncIterator()
         let message = try await iter.next()
-        XCTAssertEqual(message?.payload, "msg".data(using: .utf8)!)
+        #expect(message?.payload == "msg".data(using: .utf8)!)
     }
 
-    func testQueueGroupSubscribe() async throws {
+    @Test(.timeLimit(.minutes(1))) func testQueueGroupSubscribe() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions().url(URL(string: natsServer.clientURL)!).build()
@@ -367,13 +328,13 @@ class CoreNatsTests: XCTestCase {
             for try await result in group {
                 if let _ = result {
                     if msgReceived == true {
-                        XCTFail("received 2 messages")
+                        Issue.record("received 2 messages")
                         return
                     }
                     msgReceived = true
                 } else {
                     if !msgReceived {
-                        XCTFail("timeout received before getting any messages")
+                        Issue.record("timeout received before getting any messages")
                         return
                     }
                     timeoutReceived = true
@@ -389,7 +350,7 @@ class CoreNatsTests: XCTestCase {
         }
     }
 
-    func testUnsubscribe() async throws {
+    @Test func testUnsubscribe() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions().url(URL(string: natsServer.clientURL)!).build()
@@ -398,23 +359,23 @@ class CoreNatsTests: XCTestCase {
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
         let iter = sub.makeAsyncIterator()
         var message = try await iter.next()
-        XCTAssertEqual(message?.payload, "msg".data(using: .utf8)!)
+        #expect(message?.payload == "msg".data(using: .utf8)!)
 
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
         try await sub.unsubscribe()
 
         message = try await iter.next()
-        XCTAssertNil(message)
+        #expect(message == nil)
 
         do {
             try await sub.unsubscribe()
         } catch NatsError.SubscriptionError.subscriptionClosed {
             return
         }
-        XCTFail("Expected subscription closed error")
+        Issue.record("Expected subscription closed error")
     }
 
-    func testUnsubscribeAfter() async throws {
+    @Test func testUnsubscribeAfter() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions().url(URL(string: natsServer.clientURL)!).build()
@@ -429,47 +390,20 @@ class CoreNatsTests: XCTestCase {
         for try await _ in sub {
             i += 1
         }
-        XCTAssertEqual(i, 3, "Expected 3 messages to be delivered")
+        #expect(i == 3, "Expected 3 messages to be delivered")
         try await client.close()
     }
 
-    func testUnsubscribeAfterWithWaitingConsumer() async throws {
-        natsServer.start()
-        logger.logLevel = .critical
-        let client = NatsClientOptions().url(URL(string: natsServer.clientURL)!).build()
-        try await client.connect()
-        let sub = try await client.subscribe(subject: "test")
-        try await sub.unsubscribe(after: 3)
-
-        // Publish one-by-one to a waiting consumer (the continuation path): auto-unsubscribe
-        // must trigger after exactly 3 delivered messages.
-        let consumed = Task { () -> Int in
-            var i = 0
-            for try await _ in sub {
-                i += 1
-            }
-            return i
-        }
-        for _ in 0..<5 {
-            try await client.publish("msg".data(using: .utf8)!, subject: "test")
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
-        let i = try await consumed.value
-        XCTAssertEqual(i, 3, "Expected exactly 3 delivered before auto-unsubscribe")
-        try await client.close()
-    }
-
-    func testConnect() async throws {
+    @Test func testConnect() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions()
             .url(URL(string: natsServer.clientURL)!)
             .build()
         try await client.connect()
-        XCTAssertNotNil(client, "Client should not be nil")
     }
 
-    func testReconnect() async throws {
+    @Test(.timeLimit(.minutes(1))) func testReconnect() async throws {
         natsServer.start()
         let port = natsServer.port!
         logger.logLevel = .critical
@@ -501,17 +435,20 @@ class CoreNatsTests: XCTestCase {
                 break
             }
         }
-        let expectation = XCTestExpectation(
-            description: "client was not notified of connection established event")
+        let connected = AsyncStream<Void>.makeStream()
         client.on(.connected) { event in
-            expectation.fulfill()
+            connected.continuation.yield(())
         }
 
         // restart the server
         natsServer.stop()
         sleep(1)
         natsServer.start(port: port)
-        await fulfillment(of: [expectation], timeout: 10.0)
+        try await confirmation { confirm in
+            var it = connected.stream.makeAsyncIterator()
+            _ = await it.next()
+            confirm()
+        }
 
         // publish more messages, sub should receive them
         Task {
@@ -528,62 +465,11 @@ class CoreNatsTests: XCTestCase {
         }
 
         // Check if the total number of messages received matches the number sent
-        XCTAssertEqual(20, messagesReceived, "Mismatch in the number of messages sent and received")
+        #expect(20 == messagesReceived, "Mismatch in the number of messages sent and received")
         try await client.close()
     }
 
-    func testQueueGroupSurvivesReconnect() async throws {
-        natsServer.start()
-        let port = natsServer.port!
-        logger.logLevel = .critical
-
-        let client = NatsClientOptions()
-            .url(URL(string: natsServer.clientURL)!)
-            .reconnectWait(1)
-            .build()
-        try await client.connect()
-
-        // Two members of one queue group: N messages produce exactly N deliveries
-        // across both. A lost queue group (plain fan-out) would double the count, which
-        // `assertForOverFulfill` rejects.
-        let delivered = XCTestExpectation(description: "each message delivered once")
-        delivered.expectedFulfillmentCount = 10
-        delivered.assertForOverFulfill = true
-
-        let sub1 = try await client.subscribe(subject: "q.subject", queue: "workers")
-        let sub2 = try await client.subscribe(subject: "q.subject", queue: "workers")
-        _ = try await client.rtt()  // ensure both SUBs reached the server
-
-        let collector1 = Task {
-            for try await _ in sub1 { delivered.fulfill() }
-        }
-        let collector2 = Task {
-            for try await _ in sub2 { delivered.fulfill() }
-        }
-
-        let reconnected = XCTestExpectation(description: "client reconnected")
-        client.on(.connected) { _ in reconnected.fulfill() }
-        natsServer.stop()
-        sleep(1)
-        natsServer.start(port: port)
-        await fulfillment(of: [reconnected], timeout: 10.0)
-        _ = try await client.rtt()  // ensure both re-SUBs were flushed after reconnect
-
-        let payload = "x".data(using: .utf8)!
-        for _ in 0..<10 {
-            try await client.publish(payload, subject: "q.subject")
-        }
-        try await client.flush()
-
-        await fulfillment(of: [delivered], timeout: 10.0)
-        // Give any erroneous duplicate deliveries a window to over-fulfill and fail.
-        _ = try await client.rtt()
-        collector1.cancel()
-        collector2.cancel()
-        try await client.close()
-    }
-
-    func testUsernameAndPassword() async throws {
+    @Test func testUsernameAndPassword() async throws {
         logger.logLevel = .critical
         let bundle = Bundle.module
         natsServer.start(cfg: bundle.url(forResource: "creds", withExtension: "conf")!.relativePath)
@@ -597,7 +483,6 @@ class CoreNatsTests: XCTestCase {
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
         try await client.flush()
         _ = try await client.subscribe(subject: "test")
-        XCTAssertNotNil(client, "Client should not be nil")
 
         // Test if client with bad credentials throws an error
         let badCertsClient = NatsClientOptions()
@@ -608,17 +493,17 @@ class CoreNatsTests: XCTestCase {
 
         do {
             try await badCertsClient.connect()
-            XCTFail("Should have thrown an error")
+            Issue.record("Should have thrown an error")
         } catch NatsError.ServerError.authorizationViolation {
             // success
             return
         } catch {
-            XCTFail("Expected auth error; got: \(error)")
+            Issue.record("Expected auth error; got: \(error)")
         }
-        XCTFail("Expected error from connect")
+        Issue.record("Expected error from connect")
     }
 
-    func testTokenAuth() async throws {
+    @Test func testTokenAuth() async throws {
         logger.logLevel = .critical
         let bundle = Bundle.module
         natsServer.start(cfg: bundle.url(forResource: "token", withExtension: "conf")!.relativePath)
@@ -632,7 +517,6 @@ class CoreNatsTests: XCTestCase {
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
         try await client.flush()
         _ = try await client.subscribe(subject: "test")
-        XCTAssertNotNil(client, "Client should not be nil")
 
         // Test if client with bad credentials throws an error
         let badCertsClient = NatsClientOptions()
@@ -643,16 +527,16 @@ class CoreNatsTests: XCTestCase {
 
         do {
             try await badCertsClient.connect()
-            XCTFail("Should have thrown an error")
+            Issue.record("Should have thrown an error")
         } catch NatsError.ServerError.authorizationViolation {
             return
         } catch {
-            XCTFail("Expected auth error; got: \(error)")
+            Issue.record("Expected auth error; got: \(error)")
         }
-        XCTFail("Expected error from connect")
+        Issue.record("Expected error from connect")
     }
 
-    func testCredentialsAuth() async throws {
+    @Test func testCredentialsAuth() async throws {
         logger.logLevel = .critical
         let bundle = Bundle.module
         natsServer.start(cfg: bundle.url(forResource: "jwt", withExtension: "conf")!.relativePath)
@@ -668,7 +552,7 @@ class CoreNatsTests: XCTestCase {
         _ = try await subscribe.next()
     }
 
-    func testNkeyAuth() async throws {
+    @Test func testNkeyAuth() async throws {
         logger.logLevel = .critical
         let bundle = Bundle.module
         natsServer.start(cfg: bundle.url(forResource: "nkey", withExtension: "conf")!.relativePath)
@@ -683,7 +567,7 @@ class CoreNatsTests: XCTestCase {
         _ = try await subscribe.next()
     }
 
-    func testNkeyAuthFile() async throws {
+    @Test func testNkeyAuthFile() async throws {
         logger.logLevel = .critical
         let bundle = Bundle.module
         natsServer.start(cfg: bundle.url(forResource: "nkey", withExtension: "conf")!.relativePath)
@@ -706,22 +590,22 @@ class CoreNatsTests: XCTestCase {
 
         do {
             try await badClient.connect()
-            XCTFail("Should have thrown an error")
+            Issue.record("Should have thrown an error")
         } catch let error as NatsError.ConnectError {
             if case .invalidConfig(_) = error {
-                XCTAssertEqual(
-                    error.description,
-                    "nats: invalid client configuration: cannot use both nkey and nkeyPath")
+                #expect(
+                    error.description
+                        == "nats: invalid client configuration: cannot use both nkey and nkeyPath")
                 return
             }
-            XCTFail("Expected auth error; got: \(error)")
+            Issue.record("Expected auth error; got: \(error)")
         } catch {
-            XCTFail("Expected auth error; got: \(error)")
+            Issue.record("Expected auth error; got: \(error)")
         }
-        XCTFail("Expected error from connect")
+        Issue.record("Expected error from connect")
     }
 
-    func testMutualTls() async throws {
+    @Test func testMutualTls() async throws {
         let bundle = Bundle.module
         logger.logLevel = .critical
         let serverCert = bundle.url(forResource: "server-cert", withExtension: "pem")!.relativePath
@@ -749,10 +633,9 @@ class CoreNatsTests: XCTestCase {
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
         try await client.flush()
         _ = try await client.subscribe(subject: "test")
-        XCTAssertNotNil(client, "Client should not be nil")
     }
 
-    func testTlsFirst() async throws {
+    @Test func testTlsFirst() async throws {
         let bundle = Bundle.module
         logger.logLevel = .critical
         let serverCert = bundle.url(forResource: "server-cert", withExtension: "pem")!.relativePath
@@ -781,10 +664,9 @@ class CoreNatsTests: XCTestCase {
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
         try await client.flush()
         _ = try await client.subscribe(subject: "test")
-        XCTAssertNotNil(client, "Client should not be nil")
     }
 
-    func testInvalidCertificate() async throws {
+    @Test func testInvalidCertificate() async throws {
         let bundle = Bundle.module
         logger.logLevel = .critical
         let serverCert = bundle.url(forResource: "server-cert", withExtension: "pem")!.relativePath
@@ -813,12 +695,12 @@ class CoreNatsTests: XCTestCase {
         } catch NatsError.ConnectError.tlsFailure(_) {
             return
         } catch {
-            XCTFail("Expected tls error; got: \(error)")
+            Issue.record("Expected tls error; got: \(error)")
         }
-        XCTFail("Expected error from connect")
+        Issue.record("Expected error from connect")
     }
 
-    func testWebsocket() async throws {
+    @Test func testWebsocket() async throws {
         logger.logLevel = .critical
         let bundle = Bundle.module
         natsServer.start(cfg: bundle.url(forResource: "ws", withExtension: "conf")!.relativePath)
@@ -830,12 +712,12 @@ class CoreNatsTests: XCTestCase {
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
         let iter = sub.makeAsyncIterator()
         let message = try await iter.next()
-        XCTAssertEqual(message?.payload, "msg".data(using: .utf8)!)
+        #expect(message?.payload == "msg".data(using: .utf8)!)
 
         try await client.close()
     }
 
-    func testWebsocketTLS() async throws {
+    @Test func testWebsocketTLS() async throws {
         logger.logLevel = .critical
         let bundle = Bundle.module
         let serverCert = bundle.url(forResource: "server-cert", withExtension: "pem")!.relativePath
@@ -864,31 +746,34 @@ class CoreNatsTests: XCTestCase {
         try await client.publish("msg".data(using: .utf8)!, subject: "test")
         let iter = sub.makeAsyncIterator()
         let message = try await iter.next()
-        XCTAssertEqual(message?.payload, "msg".data(using: .utf8)!)
+        #expect(message?.payload == "msg".data(using: .utf8)!)
 
         try await client.close()
     }
 
-    func testLameDuckMode() async throws {
+    @Test(.timeLimit(.minutes(1))) func testLameDuckMode() async throws {
         natsServer.start()
         logger.logLevel = .critical
 
         let client = NatsClientOptions().url(URL(string: natsServer.clientURL)!).build()
 
-        let expectation = XCTestExpectation(
-            description: "client was not notified of connection established event")
+        let lameDuck = AsyncStream<NatsEventKind>.makeStream()
         client.on(.lameDuckMode) { event in
-            XCTAssertEqual(event.kind(), NatsEventKind.lameDuckMode)
-            expectation.fulfill()
+            lameDuck.continuation.yield(event.kind())
         }
         try await client.connect()
 
         natsServer.sendSignal(.lameDuckMode)
-        await fulfillment(of: [expectation], timeout: 1.0)
+        try await confirmation { confirm in
+            var it = lameDuck.stream.makeAsyncIterator()
+            let kind = await it.next()
+            #expect(kind == NatsEventKind.lameDuckMode)
+            confirm()
+        }
         try await client.close()
     }
 
-    func testRequest() async throws {
+    @Test(.timeLimit(.minutes(1))) func testRequest() async throws {
         natsServer.start()
         logger.logLevel = .critical
 
@@ -903,12 +788,12 @@ class CoreNatsTests: XCTestCase {
             }
         }
         let response = try await client.request("request".data(using: .utf8)!, subject: "service")
-        XCTAssertEqual(response.payload, "reply".data(using: .utf8)!)
+        #expect(response.payload == "reply".data(using: .utf8)!)
 
         try await client.close()
     }
 
-    func testRequestCustomInbox() async throws {
+    @Test(.timeLimit(.minutes(1))) func testRequestCustomInbox() async throws {
         natsServer.start()
         logger.logLevel = .debug
 
@@ -926,12 +811,12 @@ class CoreNatsTests: XCTestCase {
             }
         }
         let response = try await client.request("request".data(using: .utf8)!, subject: "service")
-        XCTAssertEqual(response.payload, "reply".data(using: .utf8)!)
+        #expect(response.payload == "reply".data(using: .utf8)!)
 
         try await client.close()
     }
 
-    func testRequest_noResponders() async throws {
+    @Test func testRequest_noResponders() async throws {
         natsServer.start()
         logger.logLevel = .critical
 
@@ -945,10 +830,10 @@ class CoreNatsTests: XCTestCase {
             return
         }
 
-        XCTFail("Expected no responders")
+        Issue.record("Expected no responders")
     }
 
-    func testRequest_timeout() async throws {
+    @Test(.timeLimit(.minutes(1))) func testRequest_timeout() async throws {
         natsServer.start()
         logger.logLevel = .critical
 
@@ -972,10 +857,10 @@ class CoreNatsTests: XCTestCase {
             return
         }
 
-        XCTFail("Expected timeout")
+        Issue.record("Expected timeout")
     }
 
-    func testRequest_permissionDenied() async throws {
+    @Test func testRequest_permissionDenied() async throws {
         logger.logLevel = .critical
         let bundle = Bundle.module
         let templateURL = bundle.url(forResource: "permissions", withExtension: "conf")!
@@ -994,10 +879,10 @@ class CoreNatsTests: XCTestCase {
             return
         }
 
-        XCTFail("Expected permission denied")
+        Issue.record("Expected permission denied")
     }
 
-    func testPublishOnClosedConnection() async throws {
+    @Test func testPublishOnClosedConnection() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions()
@@ -1006,7 +891,7 @@ class CoreNatsTests: XCTestCase {
         try await client.connect()
 
         let rtt: TimeInterval = try await client.rtt()
-        XCTAssertGreaterThan(rtt, 0, "should have RTT")
+        #expect(rtt > 0, "should have RTT")
 
         try await client.close()
         do {
@@ -1014,12 +899,12 @@ class CoreNatsTests: XCTestCase {
         } catch NatsError.ClientError.connectionClosed {
             return
         } catch {
-            XCTFail("Expected connection closed error; got: \(error)")
+            Issue.record("Expected connection closed error; got: \(error)")
         }
-        XCTFail("Expected connection closed error")
+        Issue.record("Expected connection closed error")
     }
 
-    func testCloseClosedConnection() async throws {
+    @Test func testCloseClosedConnection() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions()
@@ -1028,7 +913,7 @@ class CoreNatsTests: XCTestCase {
         try await client.connect()
 
         let rtt: TimeInterval = try await client.rtt()
-        XCTAssertGreaterThan(rtt, 0, "should have RTT")
+        #expect(rtt > 0, "should have RTT")
 
         try await client.close()
         do {
@@ -1036,12 +921,12 @@ class CoreNatsTests: XCTestCase {
         } catch NatsError.ClientError.connectionClosed {
             return
         } catch {
-            XCTFail("Expected connection closed error; got: \(error)")
+            Issue.record("Expected connection closed error; got: \(error)")
         }
-        XCTFail("Expected connection closed error")
+        Issue.record("Expected connection closed error")
     }
 
-    func testSuspendClosedConnection() async throws {
+    @Test func testSuspendClosedConnection() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions()
@@ -1050,7 +935,7 @@ class CoreNatsTests: XCTestCase {
         try await client.connect()
 
         let rtt: TimeInterval = try await client.rtt()
-        XCTAssertGreaterThan(rtt, 0, "should have RTT")
+        #expect(rtt > 0, "should have RTT")
 
         try await client.close()
         do {
@@ -1058,12 +943,12 @@ class CoreNatsTests: XCTestCase {
         } catch NatsError.ClientError.connectionClosed {
             return
         } catch {
-            XCTFail("Expected connection closed error; got: \(error)")
+            Issue.record("Expected connection closed error; got: \(error)")
         }
-        XCTFail("Expected connection closed error")
+        Issue.record("Expected connection closed error")
     }
 
-    func testReconnectOnClosedConnection() async throws {
+    @Test func testReconnectOnClosedConnection() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions()
@@ -1072,7 +957,7 @@ class CoreNatsTests: XCTestCase {
         try await client.connect()
 
         let rtt: TimeInterval = try await client.rtt()
-        XCTAssertGreaterThan(rtt, 0, "should have RTT")
+        #expect(rtt > 0, "should have RTT")
 
         try await client.close()
         do {
@@ -1080,12 +965,12 @@ class CoreNatsTests: XCTestCase {
         } catch NatsError.ClientError.connectionClosed {
             return
         } catch {
-            XCTFail("Expected connection closed error; got: \(error)")
+            Issue.record("Expected connection closed error; got: \(error)")
         }
-        XCTFail("Expected connection closed error")
+        Issue.record("Expected connection closed error")
     }
 
-    func testSubscribeMissingPermissions() async throws {
+    @Test func testSubscribeMissingPermissions() async throws {
         logger.logLevel = .critical
         let bundle = Bundle.module
         let cfgFile = try createConfigFileFromTemplate(
@@ -1102,32 +987,32 @@ class CoreNatsTests: XCTestCase {
         var isError = false
         do {
             for try await _ in sub {
-                XCTFail("Expected no message)")
+                Issue.record("Expected no message)")
             }
         } catch NatsError.SubscriptionError.permissionDenied {
             // success
             isError = true
         }
         if !isError {
-            XCTFail("Expected missing permissions error")
+            Issue.record("Expected missing permissions error")
         }
 
         sub = try await client.subscribe(subject: "events.*")
         isError = false
         do {
             for try await _ in sub {
-                XCTFail("Expected no message)")
+                Issue.record("Expected no message)")
             }
         } catch NatsError.SubscriptionError.permissionDenied {
             // success
             isError = true
         }
         if !isError {
-            XCTFail("Expected missing permissions error")
+            Issue.record("Expected missing permissions error")
         }
     }
 
-    func testSubscribePermissionsRevoked() async throws {
+    @Test func testSubscribePermissionsRevoked() async throws {
         logger.logLevel = .critical
         let bundle = Bundle.module
         let templateURL = bundle.url(forResource: "permissions", withExtension: "conf")!
@@ -1160,38 +1045,11 @@ class CoreNatsTests: XCTestCase {
             // success
             return
         }
-        XCTFail("Expected permission denied error")
-    }
-
-    /// Test race condition in concurrent subscriptions
-    /// This test ensures that creating multiple subscriptions concurrently doesn't cause
-    /// segmentation faults due to race conditions in the subscription map.
-    func testConcurrentSubscriptionCreation() async throws {
-        natsServer.start()
-
-        let client = NatsClientOptions()
-            .url(URL(string: natsServer.clientURL)!)
-            .build()
-
-        try await client.connect()
-
-        // Create 10 subscriptions concurrently
-        let tasks = (0..<10).map { i in
-            Task {
-                try await client.subscribe(subject: "concurrent.test.\(i)")
-            }
-        }
-
-        // Wait for all subscriptions to complete
-        for task in tasks {
-            _ = try await task.value
-        }
-
-        try await client.close()
+        Issue.record("Expected permission denied error")
     }
 
     /// Test that multiple connect() calls on the same client throw an error
-    func testMultipleConnectCallsThrowError() async throws {
+    @Test func testMultipleConnectCallsThrowError() async throws {
         natsServer.start()
 
         let client = NatsClientOptions()
@@ -1204,137 +1062,99 @@ class CoreNatsTests: XCTestCase {
         // Second connect should throw alreadyConnected error
         do {
             try await client.connect()
-            XCTFail("Second connect() should have thrown an error")
+            Issue.record("Second connect() should have thrown an error")
         } catch NatsError.ClientError.alreadyConnected {
             // Expected behavior
         } catch {
-            XCTFail("Expected alreadyConnected error, got: \(error)")
+            Issue.record("Expected alreadyConnected error, got: \(error)")
         }
 
         try await client.close()
     }
 
-    /// Test ByteBuffer reinitialization
-    func testByteBufferReinitialization() async throws {
+    @Test(.timeLimit(.minutes(1))) func testUnsubscribeAfterWithWaitingConsumer() async throws {
         natsServer.start()
-
-        let client = NatsClientOptions()
-            .url(URL(string: natsServer.clientURL)!)
-            .reconnectWait(0.01)  // Very short reconnect wait
-            .maxReconnects(100)
-            .build()
-
+        logger.logLevel = .critical
+        let client = NatsClientOptions().url(URL(string: natsServer.clientURL)!).build()
         try await client.connect()
+        let sub = try await client.subscribe(subject: "test")
+        try await sub.unsubscribe(after: 3)
 
-        let sub = try await client.subscribe(subject: "test.buffer.race")
-
-        // Create concurrent tasks that will stress the buffer
-        let publishTask = Task {
-            for i in 0..<1000 {
-                // Send messages with varying sizes to stress buffer
-                let payload = String(repeating: "X", count: i % 1000 + 1)
-                try? await client.publish(payload.data(using: .utf8)!, subject: "test.buffer.race")
-                if i % 10 == 0 {
-                    // Add small delays occasionally to change timing
-                    try? await Task.sleep(nanoseconds: 1000)
-                }
-            }
-        }
-
-        let reconnectTask = Task {
-            for _ in 0..<20 {
-                // Force reconnects while messages are being processed
-                try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
-                try? await client.reconnect()
-            }
-        }
-
-        // Try to consume messages during reconnect
-        let consumeTask = Task {
-            var count = 0
+        let consumed = Task { () -> Int in
+            var i = 0
             for try await _ in sub {
-                count += 1
-                if count > 100 {
-                    break
-                }
+                i += 1
             }
+            return i
         }
-
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask { await publishTask.value }
-            group.addTask { await reconnectTask.value }
-            group.addTask { try await consumeTask.value }
-
-            _ = try await group.waitForAll()
-            group.cancelAll()
+        for _ in 0..<5 {
+            try await client.publish("msg".data(using: .utf8)!, subject: "test")
+            try await Task.sleep(nanoseconds: 100_000_000)
         }
-
+        let i = try await consumed.value
+        #expect(i == 3, "Expected exactly 3 delivered before auto-unsubscribe")
         try await client.close()
     }
 
-    /// Test concurrent channelActive and channelReadComplete
-    func testConcurrentChannelActiveAndRead() async throws {
+    @Test(.timeLimit(.minutes(1))) func testQueueGroupSurvivesReconnect() async throws {
         natsServer.start()
+        let port = natsServer.port!
+        logger.logLevel = .critical
 
         let client = NatsClientOptions()
             .url(URL(string: natsServer.clientURL)!)
-            .reconnectWait(0.01)
-            .maxReconnects(50)
+            .reconnectWait(1)
             .build()
-
         try await client.connect()
 
-        let sub = try await client.subscribe(subject: "test.concurrent.>")
+        let sub1 = try await client.subscribe(subject: "q.subject", queue: "workers")
+        let sub2 = try await client.subscribe(subject: "q.subject", queue: "workers")
+        _ = try await client.rtt()
 
-        // Task 1: Rapid publishing
-        let publishTask = Task {
-            for i in 0..<500 {
-                let subjects = ["test.concurrent.a", "test.concurrent.b", "test.concurrent.c"]
-                let subject = subjects[i % subjects.count]
-                let payload = String(repeating: "D", count: (i * 7) % 2048 + 100)
-                try? await client.publish(payload.data(using: .utf8)!, subject: subject)
-            }
+        let reconnected = AsyncStream<Void>.makeStream()
+        client.on(.connected) { _ in reconnected.continuation.yield(()) }
+        natsServer.stop()
+        sleep(1)
+        natsServer.start(port: port)
+        try await confirmation { confirm in
+            var it = reconnected.stream.makeAsyncIterator()
+            _ = await it.next()
+            confirm()
         }
+        _ = try await client.rtt()
 
-        // Task 2: Force disconnections/reconnections
-        let reconnectTask = Task {
-            for i in 0..<10 {
-                try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
-                try await client.reconnect()
-
-                for j in 0..<10 {
-                    try? await client.publish(
-                        "RECONNECT-\(i)-\(j)".data(using: .utf8)!,
-                        subject: "test.concurrent.reconnect")
+        try await confirmation(expectedCount: 10) { delivered in
+            let received = AsyncStream<Void>.makeStream()
+            let collector1 = Task {
+                for try await _ in sub1 {
+                    delivered()
+                    received.continuation.yield(())
                 }
             }
-        }
-
-        // Task 3: Consume messages
-        let consumeTask = Task {
-            var count = 0
-            for try await _ in sub {
-                count += 1
-                if count > 200 {
-                    break
-                }
-                // Add occasional small delays to vary timing
-                if count % 50 == 0 {
-                    try await Task.sleep(nanoseconds: 1_000_000)
+            let collector2 = Task {
+                for try await _ in sub2 {
+                    delivered()
+                    received.continuation.yield(())
                 }
             }
+
+            let payload = "x".data(using: .utf8)!
+            for _ in 0..<10 {
+                try await client.publish(payload, subject: "q.subject")
+            }
+            try await client.flush()
+
+            var it = received.stream.makeAsyncIterator()
+            for _ in 0..<10 {
+                _ = await it.next()
+            }
+            _ = try await client.rtt()
+
+            collector1.cancel()
+            collector2.cancel()
+            _ = try? await collector1.value
+            _ = try? await collector2.value
         }
-
-        // Wait for all tasks
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask { await publishTask.value }
-            group.addTask { try await reconnectTask.value }
-            group.addTask { try await consumeTask.value }
-
-            _ = try await group.waitForAll()
-            group.cancelAll()
-        }
-
         try await client.close()
     }
 

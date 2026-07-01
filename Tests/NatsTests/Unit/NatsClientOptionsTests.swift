@@ -11,34 +11,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import XCTest
+import Foundation
+import Testing
 
 @testable import Nats
 
-class NatsClientOptionsTests: XCTestCase {
-    static var allTests = [
-        ("testDefaultInboxPrefix", testDefaultInboxPrefix),
-        ("testCustomInboxPrefix", testCustomInboxPrefix),
-        ("testDefaultPortsInjection", testDefaultPortsInjection),
-    ]
+@Suite struct NatsClientOptionsTests {
 
-    func testDefaultInboxPrefix() {
+    @Test func testDefaultInboxPrefix() {
         let client = NatsClientOptions().build()
         let inbox = client.newInbox()
-        XCTAssertTrue(inbox.hasPrefix("_INBOX."), "Default inbox prefix should be '_INBOX.'")
-        XCTAssertEqual(inbox.count, "_INBOX.".count + 22, "Inbox should have prefix plus NUID")
+        #expect(inbox.hasPrefix("_INBOX."), "Default inbox prefix should be '_INBOX.'")
+        #expect(inbox.count == "_INBOX.".count + 22, "Inbox should have prefix plus NUID")
     }
 
-    func testCustomInboxPrefix() {
+    @Test func testCustomInboxPrefix() {
         let customPrefix = "_INBOX_abc123."
         let client = NatsClientOptions().inboxPrefix(customPrefix).build()
         let inbox = client.newInbox()
-        XCTAssertTrue(inbox.hasPrefix(customPrefix), "Inbox should use custom prefix")
-        XCTAssertEqual(
-            inbox.count, customPrefix.count + 22, "Inbox should have custom prefix plus NUID")
+        #expect(inbox.hasPrefix(customPrefix), "Inbox should use custom prefix")
+        #expect(
+            inbox.count == customPrefix.count + 22, "Inbox should have custom prefix plus NUID")
     }
 
-    func testDefaultPortsInjection() {
+    @Test func testDefaultPortsInjection() {
         let options = NatsClientOptions()
 
         let natsUrl = URL(string: "nats://localhost")!
@@ -55,18 +51,18 @@ class NatsClientOptionsTests: XCTestCase {
         guard
             let internalUrls = mirror.children.first(where: { $0.label == "urls" })?.value as? [URL]
         else {
-            XCTFail("Could not extract urls from options")
+            Issue.record("Could not extract urls from options")
             return
         }
 
-        XCTAssertEqual(internalUrls[0].port, 4222, "nats:// should default to 4222")
-        XCTAssertEqual(internalUrls[1].port, 4222, "tls:// should default to 4222")
-        XCTAssertEqual(internalUrls[2].port, 80, "ws:// should default to 80")
-        XCTAssertEqual(internalUrls[3].port, 443, "wss:// should default to 443")
-        XCTAssertEqual(internalUrls[4].port, 9999, "Custom ports should not be overwritten")
+        #expect(internalUrls[0].port == 4222, "nats:// should default to 4222")
+        #expect(internalUrls[1].port == 4222, "tls:// should default to 4222")
+        #expect(internalUrls[2].port == 80, "ws:// should default to 80")
+        #expect(internalUrls[3].port == 443, "wss:// should default to 443")
+        #expect(internalUrls[4].port == 9999, "Custom ports should not be overwritten")
     }
 
-    func testDefaultPortsInjectionWithSingleUrl() {
+    @Test func testDefaultPortsInjectionWithSingleUrl() {
         let options = NatsClientOptions()
 
         let natsUrl = URL(string: "nats://localhost")!
@@ -77,11 +73,11 @@ class NatsClientOptionsTests: XCTestCase {
         guard
             let internalUrls = mirror.children.first(where: { $0.label == "urls" })?.value as? [URL]
         else {
-            XCTFail("Could not extract urls from options")
+            Issue.record("Could not extract urls from options")
             return
         }
 
-        XCTAssertEqual(internalUrls.count, 1, "Single URL should produce exactly one entry")
-        XCTAssertEqual(internalUrls[0].port, 4222, "nats:// should default to 4222")
+        #expect(internalUrls.count == 1, "Single URL should produce exactly one entry")
+        #expect(internalUrls[0].port == 4222, "nats:// should default to 4222")
     }
 }

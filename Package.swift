@@ -56,7 +56,10 @@ let package = Package(
 
         .testTarget(
             name: "NatsTests",
-            dependencies: ["Nats", "NatsServer"],
+            dependencies: [
+                "Nats", "NatsServer",
+                .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
+            ],
             resources: [
                 .process("Integration/Resources")
             ]

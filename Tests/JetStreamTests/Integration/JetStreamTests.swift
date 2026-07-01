@@ -11,46 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import Foundation
 import JetStream
 import Logging
 import NIO
 import Nats
 import NatsServer
-import XCTest
+import Testing
 
-class JetStreamTests: XCTestCase {
-
-    static var allTests = [
-        ("testJetStreamContext", testJetStreamContext),
-        ("testJetStreamNotEnabled", testJetStreamNotEnabled),
-        ("testJetStreamNotEnabledForAccount", testJetStreamNotEnabledForAccount),
-        ("testStreamCRUD", testStreamCRUD),
-        ("testStreamConfig", testStreamConfig),
-        ("testStreamInfo", testStreamInfo),
-        ("testListStreams", testListStreams),
-        ("testGetMessage", testGetMessage),
-        ("testGetMessageDirect", testGetMessageDirect),
-        ("testDeleteMessage", testDeleteMessage),
-        ("testPurge", testPurge),
-        ("testPurgeSequence", testPurgeSequence),
-        ("testPurgeKeepm", testPurgeKeep),
-        ("testJetStreamContextConsumerCRUD", testJetStreamContextConsumerCRUD),
-        ("testStreamConsumerCRUD", testStreamConsumerCRUD),
-        ("testConsumerConfig", testConsumerConfig),
-        ("testCreateEphemeralConsumer", testCreateEphemeralConsumer),
-        ("testConsumerInfo", testConsumerInfo),
-        ("testConsumerInfoWithCustomInbox", testConsumerInfoWithCustomInbox),
-        ("testListConsumers", testListConsumers),
-    ]
+@Suite(.serialized) final class JetStreamTests {
 
     var natsServer = NatsServer()
 
-    override func tearDown() {
-        super.tearDown()
+    deinit {
         natsServer.stop()
     }
 
-    func testJetStreamContext() async throws {
+    @Test func testJetStreamContext() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -80,7 +57,7 @@ class JetStreamTests: XCTestCase {
         try await client.close()
     }
 
-    func testJetStreamContextWithPrefix() async throws {
+    @Test func testJetStreamContextWithPrefix() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "prefix", withExtension: "conf")!.relativePath)
@@ -105,7 +82,7 @@ class JetStreamTests: XCTestCase {
         _ = try await jsA.getStream(name: "TEST")
     }
 
-    func testJetStreamContextWithDomain() async throws {
+    @Test func testJetStreamContextWithDomain() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "domain", withExtension: "conf")!.relativePath)
@@ -120,7 +97,7 @@ class JetStreamTests: XCTestCase {
         _ = try await js.createStream(cfg: StreamConfig(name: "TEST", subjects: ["foo"]))
     }
 
-    func testJetStreamNotEnabled() async throws {
+    @Test func testJetStreamNotEnabled() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions()
@@ -138,7 +115,7 @@ class JetStreamTests: XCTestCase {
         }
     }
 
-    func testJetStreamNotEnabledForAccount() async throws {
+    @Test func testJetStreamNotEnabledForAccount() async throws {
         natsServer.start()
         logger.logLevel = .critical
         let client = NatsClientOptions()
@@ -156,7 +133,7 @@ class JetStreamTests: XCTestCase {
         }
     }
 
-    func testStreamCRUD() async throws {
+    @Test func testStreamCRUD() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -185,7 +162,7 @@ class JetStreamTests: XCTestCase {
         // we need to set the metadata to whatever was set by the server as it contains e.g. server version
         expectedConfig.metadata = stream.info.config.metadata
 
-        XCTAssertEqual(expectedConfig, stream.info.config)
+        #expect(expectedConfig == stream.info.config)
 
         // attempt overwriting existing stream
         var errOk = false
@@ -196,19 +173,19 @@ class JetStreamTests: XCTestCase {
             errOk = true
             // success
         }
-        XCTAssertTrue(errOk, "Expected stream not found error")
+        #expect(errOk, "Expected stream not found error")
 
         // get a stream
         guard var stream = try await ctx.getStream(name: "test") else {
-            XCTFail("Expected a stream, got nil")
+            Issue.record("Expected a stream, got nil")
             return
         }
-        XCTAssertEqual(expectedConfig, stream.info.config)
+        #expect(expectedConfig == stream.info.config)
 
         // get a non-existing stream
         errOk = false
         if let _ = try await ctx.getStream(name: "bad") {
-            XCTFail("Expected stream not found, go: \(stream)")
+            Issue.record("Expected stream not found, go: \(stream)")
         }
 
         // update the stream
@@ -216,7 +193,7 @@ class JetStreamTests: XCTestCase {
         stream = try await ctx.updateStream(cfg: cfg)
         expectedConfig.description = "updated"
 
-        XCTAssertEqual(expectedConfig, stream.info.config)
+        #expect(expectedConfig == stream.info.config)
 
         // attempt to update illegal stream property
         cfg.storage = .memory
@@ -237,18 +214,18 @@ class JetStreamTests: XCTestCase {
             // success
             errOk = true
         }
-        XCTAssertTrue(errOk, "Expected stream not found error")
+        #expect(errOk, "Expected stream not found error")
 
         // delete the stream
         try await ctx.deleteStream(name: "test")
 
         // make sure the stream no longer exists
         if let _ = try await ctx.getStream(name: "test") {
-            XCTFail("Expected stream not found")
+            Issue.record("Expected stream not found")
         }
     }
 
-    func testStreamConfig() async throws {
+    @Test func testStreamConfig() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -276,10 +253,10 @@ class JetStreamTests: XCTestCase {
         // we need to set the metadata to whatever was set by the server as it contains e.g. server version
         cfg.metadata = stream.info.config.metadata
 
-        XCTAssertEqual(stream.info.config, cfg)
+        #expect(stream.info.config == cfg)
     }
 
-    func testStreamInfo() async throws {
+    @Test func testStreamInfo() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -295,7 +272,7 @@ class JetStreamTests: XCTestCase {
         let stream = try await ctx.createStream(cfg: cfg)
 
         let info = try await stream.info()
-        XCTAssertEqual(info.config.name, "test")
+        #expect(info.config.name == "test")
 
         // simulate external update of stream
         let updateJSON = """
@@ -309,14 +286,14 @@ class JetStreamTests: XCTestCase {
 
         _ = try await client.request(data, subject: "$JS.API.STREAM.UPDATE.test")
 
-        XCTAssertNil(stream.info.config.description)
+        #expect(stream.info.config.description == nil)
 
         let newInfo = try await stream.info()
-        XCTAssertEqual(newInfo.config.description, "updated")
-        XCTAssertEqual(stream.info.config.description, "updated")
+        #expect(newInfo.config.description == "updated")
+        #expect(stream.info.config.description == "updated")
     }
 
-    func testListStreams() async throws {
+    @Test func testListStreams() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -340,50 +317,50 @@ class JetStreamTests: XCTestCase {
         for try await _ in streams {
             i += 1
         }
-        XCTAssertEqual(i, 260)
+        #expect(i == 260)
 
         var names = await ctx.streamNames()
         i = 0
         for try await _ in names {
             i += 1
         }
-        XCTAssertEqual(i, 260)
+        #expect(i == 260)
 
         // list streams with subject foo.*
         streams = await ctx.streams(subject: "foo.*")
 
         i = 0
         for try await stream in streams {
-            XCTAssert(stream.config.subjects!.first!.starts(with: "foo."))
+            #expect(stream.config.subjects!.first!.starts(with: "foo."))
             i += 1
         }
-        XCTAssertEqual(i, 130)
+        #expect(i == 130)
 
         names = await ctx.streamNames(subject: "foo.*")
         i = 0
         for try await _ in names {
             i += 1
         }
-        XCTAssertEqual(i, 130)
+        #expect(i == 130)
 
         // list streams with subject not matching any
         streams = await ctx.streams(subject: "baz.*")
 
         i = 0
         for try await stream in streams {
-            XCTFail("should return 0 streams, got: \(stream.config)")
+            Issue.record("should return 0 streams, got: \(stream.config)")
         }
-        XCTAssertEqual(i, 0)
+        #expect(i == 0)
 
         names = await ctx.streamNames(subject: "baz.*")
         i = 0
         for try await _ in names {
             i += 1
         }
-        XCTAssertEqual(i, 0)
+        #expect(i == 0)
     }
 
-    func testGetMessage() async throws {
+    @Test func testGetMessage() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -410,30 +387,30 @@ class JetStreamTests: XCTestCase {
 
         // get by sequence
         var msg = try await stream.getMessage(sequence: 50)
-        XCTAssertEqual(msg!.payload, "50".data(using: .utf8)!)
+        #expect(msg!.payload == "50".data(using: .utf8)!)
 
         // get by sequence and subject
         msg = try await stream.getMessage(sequence: 50, subject: "foo.B")
         // msg with sequence 50 is on subject foo.A, so we expect the next message which should be on foo.B
-        XCTAssertEqual(msg!.payload, "51".data(using: .utf8)!)
-        XCTAssertEqual(msg!.headers, hm)
+        #expect(msg!.payload == "51".data(using: .utf8)!)
+        #expect(msg!.headers == hm)
 
         // get first message from a subject
         msg = try await stream.getMessage(firstForSubject: "foo.A")
-        XCTAssertEqual(msg!.payload, "2".data(using: .utf8)!)
-        XCTAssertEqual(msg!.headers, hm)
+        #expect(msg!.payload == "2".data(using: .utf8)!)
+        #expect(msg!.headers == hm)
 
         // get last message from subject
         msg = try await stream.getMessage(lastForSubject: "foo.B")
-        XCTAssertEqual(msg!.payload, "99".data(using: .utf8)!)
-        XCTAssertEqual(msg!.headers, hm)
+        #expect(msg!.payload == "99".data(using: .utf8)!)
+        #expect(msg!.headers == hm)
 
         // message not found
         msg = try await stream.getMessage(sequence: 200)
-        XCTAssertNil(msg)
+        #expect(msg == nil)
     }
 
-    func testGetMessageDirect() async throws {
+    @Test func testGetMessageDirect() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -460,27 +437,27 @@ class JetStreamTests: XCTestCase {
 
         // get by sequence
         var msg = try await stream.getMessageDirect(sequence: 50)
-        XCTAssertEqual(msg!.payload, "50".data(using: .utf8)!)
+        #expect(msg!.payload == "50".data(using: .utf8)!)
 
         // get by sequence and subject
         msg = try await stream.getMessageDirect(sequence: 50, subject: "foo.B")
         // msg with sequence 50 is on subject foo.A, so we expect the next message which should be on foo.B
-        XCTAssertEqual(msg!.payload, "51".data(using: .utf8)!)
+        #expect(msg!.payload == "51".data(using: .utf8)!)
 
         // get first message from a subject
         msg = try await stream.getMessageDirect(firstForSubject: "foo.A")
-        XCTAssertEqual(msg!.payload, "2".data(using: .utf8)!)
+        #expect(msg!.payload == "2".data(using: .utf8)!)
 
         // get last message from subject
         msg = try await stream.getMessageDirect(lastForSubject: "foo.B")
-        XCTAssertEqual(msg!.payload, "99".data(using: .utf8)!)
+        #expect(msg!.payload == "99".data(using: .utf8)!)
 
         // message not found
         msg = try await stream.getMessageDirect(sequence: 200)
-        XCTAssertNil(msg)
+        #expect(msg == nil)
     }
 
-    func testDeleteMessage() async throws {
+    @Test func testDeleteMessage() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -503,13 +480,13 @@ class JetStreamTests: XCTestCase {
 
         // get by sequence to make sure the msg is available
         var msg = try await stream.getMessage(sequence: 5)
-        XCTAssertEqual(msg!.payload, "5".data(using: .utf8)!)
+        #expect(msg!.payload == "5".data(using: .utf8)!)
 
         // delete
         try await stream.deleteMessage(sequence: 5)
 
         msg = try await stream.getMessage(sequence: 5)
-        XCTAssertNil(msg)
+        #expect(msg == nil)
 
         // try deleting the msg again
         var errOk = false
@@ -519,21 +496,21 @@ class JetStreamTests: XCTestCase {
             // success
             errOk = true
         }
-        XCTAssertTrue(errOk, "Expected sequence not found error")
+        #expect(errOk, "Expected sequence not found error")
 
         // now do the same with secure delete
         // we cannot easily test whether the operation actually overwritten the value from unit test
         msg = try await stream.getMessage(sequence: 7)
-        XCTAssertEqual(msg!.payload, "7".data(using: .utf8)!)
+        #expect(msg!.payload == "7".data(using: .utf8)!)
 
         // delete
         try await stream.deleteMessage(sequence: 7, secure: true)
 
         msg = try await stream.getMessage(sequence: 7)
-        XCTAssertNil(msg)
+        #expect(msg == nil)
     }
 
-    func testPurge() async throws {
+    @Test func testPurge() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -566,18 +543,18 @@ class JetStreamTests: XCTestCase {
 
         // purge foo.B
         var purged = try await stream.purge(subject: "foo.B")
-        XCTAssertEqual(purged, 4)
+        #expect(purged == 4)
         var info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 8)
+        #expect(info.state.messages == 8)
 
         // purge rest of the messages
         purged = try await stream.purge()
-        XCTAssertEqual(purged, 8)
+        #expect(purged == 8)
         info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 0)
+        #expect(info.state.messages == 0)
     }
 
-    func testPurgeSequence() async throws {
+    @Test func testPurgeSequence() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -611,20 +588,20 @@ class JetStreamTests: XCTestCase {
         // purge "foo.B" with sequence 15
         // This should remove only the first 4 messages on foo.B
         var purged = try await stream.purge(sequence: 15, subject: "foo.B")
-        XCTAssertEqual(purged, 4)
+        #expect(purged == 4)
         var info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 56)
+        #expect(info.state.messages == 56)
 
         // purge with sequence 41, no filter
         // This should remove the first 36 (after previous purge) messages
         // and leave us with 20 messages
         purged = try await stream.purge(sequence: 41)
-        XCTAssertEqual(purged, 36)
+        #expect(purged == 36)
         info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 20)
+        #expect(info.state.messages == 20)
     }
 
-    func testPurgeKeep() async throws {
+    @Test func testPurgeKeep() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -658,19 +635,19 @@ class JetStreamTests: XCTestCase {
         // purge "foo.B" retaining 50 messages
         // This should remove 15 messages from "foo.B"
         var purged = try await stream.purge(keep: 5, subject: "foo.B")
-        XCTAssertEqual(purged, 15)
+        #expect(purged == 15)
         var info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 45)
+        #expect(info.state.messages == 45)
 
         // purge with keep 10, no filter
         // This should remove all but 10 messages from the stream
         purged = try await stream.purge(keep: 10)
-        XCTAssertEqual(purged, 35)
+        #expect(purged == 35)
         info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 10)
+        #expect(info.state.messages == 10)
     }
 
-    func testStreamConsumerCRUD() async throws {
+    @Test func testStreamConsumerCRUD() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -705,23 +682,23 @@ class JetStreamTests: XCTestCase {
             errOk = true
             // success
         }
-        XCTAssertTrue(errOk, "Expected consumer exists error")
+        #expect(errOk, "Expected consumer exists error")
 
         // get a consumer
         guard var cons = try await stream.getConsumer(name: "test") else {
-            XCTFail("Expected a stream, got nil")
+            Issue.record("Expected a stream, got nil")
             return
         }
 
         // we need to set the metadata to whatever was set by the server as it contains e.g. server version
         expectedConfig.metadata = cons.info.config.metadata
 
-        XCTAssertEqual(expectedConfig, cons.info.config)
+        #expect(expectedConfig == cons.info.config)
 
         // get a non-existing consumer
         errOk = false
         if let cons = try await stream.getConsumer(name: "bad") {
-            XCTFail("Expected consumer not found, got: \(cons)")
+            Issue.record("Expected consumer not found, got: \(cons)")
         }
 
         // update the stream
@@ -729,7 +706,7 @@ class JetStreamTests: XCTestCase {
         cons = try await stream.updateConsumer(cfg: cfg)
         expectedConfig.description = "updated"
 
-        XCTAssertEqual(expectedConfig, cons.info.config)
+        #expect(expectedConfig == cons.info.config)
 
         // attempt to update illegal consumer property
         cfg.memoryStorage = true
@@ -749,18 +726,18 @@ class JetStreamTests: XCTestCase {
             // success
             errOk = true
         }
-        XCTAssertTrue(errOk, "Expected consumer not found error")
+        #expect(errOk, "Expected consumer not found error")
 
         // delete the consumer
         try await stream.deleteConsumer(name: "test")
 
         // make sure the consumer no longer exists
         if let _ = try await stream.getConsumer(name: "test") {
-            XCTFail("Expected consumer not found")
+            Issue.record("Expected consumer not found")
         }
     }
 
-    func testJetStreamContextConsumerCRUD() async throws {
+    @Test func testJetStreamContextConsumerCRUD() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -797,21 +774,21 @@ class JetStreamTests: XCTestCase {
             errOk = true
             // success
         }
-        XCTAssertTrue(errOk, "Expected consumer exists error")
+        #expect(errOk, "Expected consumer exists error")
 
         // get a consumer
         guard var cons = try await ctx.getConsumer(stream: "test", name: "test") else {
-            XCTFail("Expected a stream, got nil")
+            Issue.record("Expected a stream, got nil")
             return
         }
         // we need to set the metadata to whatever was set by the server as it contains e.g. server version
         expectedConfig.metadata = cons.info.config.metadata
-        XCTAssertEqual(expectedConfig, cons.info.config)
+        #expect(expectedConfig == cons.info.config)
 
         // get a non-existing consumer
         errOk = false
         if let cons = try await ctx.getConsumer(stream: "test", name: "bad") {
-            XCTFail("Expected consumer not found, got: \(cons)")
+            Issue.record("Expected consumer not found, got: \(cons)")
         }
 
         // update the stream
@@ -819,7 +796,7 @@ class JetStreamTests: XCTestCase {
         cons = try await ctx.updateConsumer(stream: "test", cfg: cfg)
         expectedConfig.description = "updated"
 
-        XCTAssertEqual(expectedConfig, cons.info.config)
+        #expect(expectedConfig == cons.info.config)
 
         // attempt to update illegal consumer property
         cfg.memoryStorage = true
@@ -839,18 +816,18 @@ class JetStreamTests: XCTestCase {
             // success
             errOk = true
         }
-        XCTAssertTrue(errOk, "Expected consumer not found error")
+        #expect(errOk, "Expected consumer not found error")
 
         // delete the consumer
         try await ctx.deleteConsumer(stream: "test", name: "test")
 
         // make sure the consumer no longer exists
         if let _ = try await ctx.getConsumer(stream: "test", name: "test") {
-            XCTFail("Expected consumer not found")
+            Issue.record("Expected consumer not found")
         }
     }
 
-    func testConsumerConfig() async throws {
+    @Test func testConsumerConfig() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -878,10 +855,10 @@ class JetStreamTests: XCTestCase {
         let cons = try await stream.createConsumer(cfg: cfg)
         cfg.metadata = cons.info.config.metadata
 
-        XCTAssertEqual(cfg, cons.info.config)
+        #expect(cfg == cons.info.config)
     }
 
-    func testCreateEphemeralConsumer() async throws {
+    @Test func testCreateEphemeralConsumer() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -896,10 +873,10 @@ class JetStreamTests: XCTestCase {
 
         let cons = try await stream.createConsumer(cfg: ConsumerConfig())
 
-        XCTAssertEqual(cons.info.name.count, 8)
+        #expect(cons.info.name.count == 8)
     }
 
-    func testConsumerInfo() async throws {
+    @Test func testConsumerInfo() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -916,7 +893,7 @@ class JetStreamTests: XCTestCase {
         let consumer = try await stream.createConsumer(cfg: cfg)
 
         let info = try await consumer.info()
-        XCTAssertEqual(info.config.name, "cons")
+        #expect(info.config.name == "cons")
 
         // simulate external update of consumer
         let updateJSON = """
@@ -934,14 +911,14 @@ class JetStreamTests: XCTestCase {
 
         _ = try await client.request(data, subject: "$JS.API.CONSUMER.CREATE.test.cons")
 
-        XCTAssertNil(consumer.info.config.description)
+        #expect(consumer.info.config.description == nil)
 
         let newInfo = try await consumer.info()
-        XCTAssertEqual(newInfo.config.description, "updated")
-        XCTAssertEqual(consumer.info.config.description, "updated")
+        #expect(newInfo.config.description == "updated")
+        #expect(consumer.info.config.description == "updated")
     }
 
-    func testConsumerInfoWithCustomInbox() async throws {
+    @Test func testConsumerInfoWithCustomInbox() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -961,7 +938,7 @@ class JetStreamTests: XCTestCase {
         let consumer = try await stream.createConsumer(cfg: cfg)
 
         let info = try await consumer.info()
-        XCTAssertEqual(info.config.name, "cons")
+        #expect(info.config.name == "cons")
 
         // simulate external update of consumer
         let updateJSON = """
@@ -979,14 +956,14 @@ class JetStreamTests: XCTestCase {
 
         _ = try await client.request(data, subject: "$JS.API.CONSUMER.CREATE.test.cons")
 
-        XCTAssertNil(consumer.info.config.description)
+        #expect(consumer.info.config.description == nil)
 
         let newInfo = try await consumer.info()
-        XCTAssertEqual(newInfo.config.description, "updated")
-        XCTAssertEqual(consumer.info.config.description, "updated")
+        #expect(newInfo.config.description == "updated")
+        #expect(consumer.info.config.description == "updated")
     }
 
-    func testListConsumers() async throws {
+    @Test func testListConsumers() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -1012,14 +989,14 @@ class JetStreamTests: XCTestCase {
         for try await _ in consumers {
             i += 1
         }
-        XCTAssertEqual(i, 260)
+        #expect(i == 260)
 
         let names = await stream.consumerNames()
         i = 0
         for try await _ in names {
             i += 1
         }
-        XCTAssertEqual(i, 260)
+        #expect(i == 260)
 
         // list consumers on non-existing stream
         consumers = await ctx.consumers(stream: "bad")
@@ -1027,7 +1004,7 @@ class JetStreamTests: XCTestCase {
         for try await _ in consumers {
             i += 1
         }
-        XCTAssertEqual(i, 0)
+        #expect(i == 0)
     }
 
 }

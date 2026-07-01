@@ -11,38 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import Foundation
 import JetStream
 import Logging
 import NatsServer
-import XCTest
+import Testing
 
 @testable import Nats
 
-class ConsumerTests: XCTestCase {
-
-    static var allTests = [
-        ("testFetchWithDefaultOptions", testFetchWithDefaultOptions),
-        ("testFetchConsumerDeleted", testFetchConsumerDeleted),
-        ("testFetchExpires", testFetchExpires),
-        ("testFetchInvalidIdleHeartbeat", testFetchInvalidIdleHeartbeat),
-        ("testAck", testAck),
-        ("testNak", testNak),
-        ("testNakWithDelay", testNakWithDelay),
-        ("testTerm", testTerm),
-        ("testFetchEmptyTerminatesWithoutHang", testFetchEmptyTerminatesWithoutHang),
-        ("testFetchCancellationTearsDownSubscription", testFetchCancellationTearsDownSubscription),
-        ("testFetchEarlyBreakTearsDownSubscription", testFetchEarlyBreakTearsDownSubscription),
-        ("testFetchCompletionTearsDownSubscription", testFetchCompletionTearsDownSubscription),
-    ]
+@Suite(.serialized) final class ConsumerTests {
 
     var natsServer = NatsServer()
 
-    override func tearDown() {
-        super.tearDown()
+    deinit {
         natsServer.stop()
     }
 
-    func testFetchWithDefaultOptions() async throws {
+    @Test func testFetchWithDefaultOptions() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -65,20 +50,20 @@ class ConsumerTests: XCTestCase {
             _ = try await ack.wait()
         }
         let info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 100)
+        #expect(info.state.messages == 100)
 
         let batch = try await consumer.fetch(batch: 30)
 
         var i = 0
         for try await msg in batch {
             try await msg.ack()
-            XCTAssertEqual(msg.payload, payload)
+            #expect(msg.payload == payload)
             i += 1
         }
-        XCTAssertEqual(i, 30)
+        #expect(i == 30)
     }
 
-    func testFetchConsumerDeleted() async throws {
+    @Test func testFetchConsumerDeleted() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -101,7 +86,7 @@ class ConsumerTests: XCTestCase {
             _ = try await ack.wait()
         }
         let info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 10)
+        #expect(info.state.messages == 10)
 
         let batch = try await consumer.fetch(batch: 30)
 
@@ -111,17 +96,17 @@ class ConsumerTests: XCTestCase {
         do {
             for try await msg in batch {
                 try await msg.ack()
-                XCTAssertEqual(msg.payload, payload)
+                #expect(msg.payload == payload)
                 i += 1
             }
         } catch JetStreamError.FetchError.consumerDeleted {
-            XCTAssertEqual(i, 10)
+            #expect(i == 10)
             return
         }
-        XCTFail("should get consumer deleted")
+        Issue.record("should get consumer deleted")
     }
 
-    func testFetchExpires() async throws {
+    @Test func testFetchExpires() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -144,20 +129,20 @@ class ConsumerTests: XCTestCase {
             _ = try await ack.wait()
         }
         let info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 10)
+        #expect(info.state.messages == 10)
 
         let batch = try await consumer.fetch(batch: 30, expires: 1)
 
         var i = 0
         for try await msg in batch {
             try await msg.ack()
-            XCTAssertEqual(msg.payload, payload)
+            #expect(msg.payload == payload)
             i += 1
         }
-        XCTAssertEqual(i, 10)
+        #expect(i == 10)
     }
 
-    func testFetchInvalidIdleHeartbeat() async throws {
+    @Test func testFetchInvalidIdleHeartbeat() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -181,10 +166,10 @@ class ConsumerTests: XCTestCase {
             // success
             return
         }
-        XCTFail("should get bad request")
+        Issue.record("should get bad request")
     }
 
-    func testFetchMissingHeartbeat() async throws {
+    @Test func testFetchMissingHeartbeat() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -207,7 +192,7 @@ class ConsumerTests: XCTestCase {
             _ = try await ack.wait()
         }
         let info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 10)
+        #expect(info.state.messages == 10)
 
         try await stream.deleteConsumer(name: "cons")
 
@@ -221,10 +206,10 @@ class ConsumerTests: XCTestCase {
             // This is also expected when the consumer has been deleted
             return
         }
-        XCTFail("should get missing heartbeats or no responders error")
+        Issue.record("should get missing heartbeats or no responders error")
     }
 
-    func testAck() async throws {
+    @Test(.timeLimit(.minutes(1))) func testAck() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -248,17 +233,17 @@ class ConsumerTests: XCTestCase {
             _ = try await ack.wait()
         }
         let info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 100)
+        #expect(info.state.messages == 100)
 
         var batch = try await consumer.fetch(batch: 10)
 
         var i = 0
         for try await msg in batch {
             try await msg.ack()
-            XCTAssertEqual(String(decoding: msg.payload!, as: UTF8.self), "\(i)")
+            #expect(String(decoding: msg.payload!, as: UTF8.self) == "\(i)")
             i += 1
         }
-        XCTAssertEqual(i, 10)
+        #expect(i == 10)
 
         // now wait 1 second and make sure the messages are not re-delivered
         sleep(1)
@@ -267,13 +252,13 @@ class ConsumerTests: XCTestCase {
 
         for try await msg in batch {
             try await msg.ack()
-            XCTAssertEqual(String(decoding: msg.payload!, as: UTF8.self), "\(i)")
+            #expect(String(decoding: msg.payload!, as: UTF8.self) == "\(i)")
             i += 1
         }
-        XCTAssertEqual(i, 20)
+        #expect(i == 20)
     }
 
-    func testNak() async throws {
+    @Test(.timeLimit(.minutes(1))) func testNak() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -297,15 +282,15 @@ class ConsumerTests: XCTestCase {
             _ = try await ack.wait()
         }
         let info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 10)
+        #expect(info.state.messages == 10)
 
         var batch = try await consumer.fetch(batch: 1)
         var iter = batch.makeAsyncIterator()
         var msg = try await iter.next()!
-        XCTAssertEqual(String(decoding: msg.payload!, as: UTF8.self), "\(0)")
+        #expect(String(decoding: msg.payload!, as: UTF8.self) == "\(0)")
         var meta = try msg.metadata()
-        XCTAssertEqual(meta.streamSequence, 1)
-        XCTAssertEqual(meta.consumerSequence, 1)
+        #expect(meta.streamSequence == 1)
+        #expect(meta.consumerSequence == 1)
         try await msg.ack(ackType: .nak())
 
         // Give the server time to process the NAK and requeue the message before fetching.
@@ -317,14 +302,14 @@ class ConsumerTests: XCTestCase {
         batch = try await consumer.fetch(batch: 1)
         iter = batch.makeAsyncIterator()
         msg = try await iter.next()!
-        XCTAssertEqual(String(decoding: msg.payload!, as: UTF8.self), "\(0)")
+        #expect(String(decoding: msg.payload!, as: UTF8.self) == "\(0)")
         meta = try msg.metadata()
-        XCTAssertEqual(meta.streamSequence, 1)
-        XCTAssertEqual(meta.consumerSequence, 2)
+        #expect(meta.streamSequence == 1)
+        #expect(meta.consumerSequence == 2)
         try await msg.ack()
     }
 
-    func testNakWithDelay() async throws {
+    @Test(.timeLimit(.minutes(1))) func testNakWithDelay() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -347,25 +332,25 @@ class ConsumerTests: XCTestCase {
             _ = try await ack.wait()
         }
         let info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 10)
+        #expect(info.state.messages == 10)
 
         var batch = try await consumer.fetch(batch: 1)
         var iter = batch.makeAsyncIterator()
         var msg = try await iter.next()!
-        XCTAssertEqual(String(decoding: msg.payload!, as: UTF8.self), "\(0)")
+        #expect(String(decoding: msg.payload!, as: UTF8.self) == "\(0)")
         var meta = try msg.metadata()
-        XCTAssertEqual(meta.streamSequence, 1)
-        XCTAssertEqual(meta.consumerSequence, 1)
+        #expect(meta.streamSequence == 1)
+        #expect(meta.consumerSequence == 1)
         try await msg.ack(ackType: .nak(delay: 0.5))
 
         // now fetch the next message immediately, it should be the next message
         batch = try await consumer.fetch(batch: 1)
         iter = batch.makeAsyncIterator()
         msg = try await iter.next()!
-        XCTAssertEqual(String(decoding: msg.payload!, as: UTF8.self), "\(1)")
+        #expect(String(decoding: msg.payload!, as: UTF8.self) == "\(1)")
         meta = try msg.metadata()
-        XCTAssertEqual(meta.streamSequence, 2)
-        XCTAssertEqual(meta.consumerSequence, 2)
+        #expect(meta.streamSequence == 2)
+        #expect(meta.consumerSequence == 2)
         try await msg.ack()
 
         // wait a second, the first message should be redelivered at this point
@@ -373,13 +358,13 @@ class ConsumerTests: XCTestCase {
         batch = try await consumer.fetch(batch: 1)
         iter = batch.makeAsyncIterator()
         msg = try await iter.next()!
-        XCTAssertEqual(String(decoding: msg.payload!, as: UTF8.self), "\(0)")
+        #expect(String(decoding: msg.payload!, as: UTF8.self) == "\(0)")
         meta = try msg.metadata()
-        XCTAssertEqual(meta.streamSequence, 1)
-        XCTAssertEqual(meta.consumerSequence, 3)
+        #expect(meta.streamSequence == 1)
+        #expect(meta.consumerSequence == 3)
     }
 
-    func testTerm() async throws {
+    @Test(.timeLimit(.minutes(1))) func testTerm() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -403,15 +388,15 @@ class ConsumerTests: XCTestCase {
             _ = try await ack.wait()
         }
         let info = try await stream.info()
-        XCTAssertEqual(info.state.messages, 10)
+        #expect(info.state.messages == 10)
 
         var batch = try await consumer.fetch(batch: 1)
         var iter = batch.makeAsyncIterator()
         var msg = try await iter.next()!
-        XCTAssertEqual(String(decoding: msg.payload!, as: UTF8.self), "\(0)")
+        #expect(String(decoding: msg.payload!, as: UTF8.self) == "\(0)")
         var meta = try msg.metadata()
-        XCTAssertEqual(meta.streamSequence, 1)
-        XCTAssertEqual(meta.consumerSequence, 1)
+        #expect(meta.streamSequence == 1)
+        #expect(meta.consumerSequence == 1)
         try await msg.ack(ackType: .term())
 
         // wait 1s, the first message should not be redelivered (even though we are past ack wait)
@@ -419,14 +404,14 @@ class ConsumerTests: XCTestCase {
         batch = try await consumer.fetch(batch: 1)
         iter = batch.makeAsyncIterator()
         msg = try await iter.next()!
-        XCTAssertEqual(String(decoding: msg.payload!, as: UTF8.self), "\(1)")
+        #expect(String(decoding: msg.payload!, as: UTF8.self) == "\(1)")
         meta = try msg.metadata()
-        XCTAssertEqual(meta.streamSequence, 2)
-        XCTAssertEqual(meta.consumerSequence, 2)
+        #expect(meta.streamSequence == 2)
+        #expect(meta.consumerSequence == 2)
         try await msg.ack()
     }
 
-    func testFetchEmptyTerminatesWithoutHang() async throws {
+    @Test func testFetchEmptyTerminatesWithoutHang() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -440,8 +425,9 @@ class ConsumerTests: XCTestCase {
             cfg: StreamConfig(name: "test", subjects: ["foo.*"]))
         let consumer = try await stream.createConsumer(cfg: ConsumerConfig(name: "cons"))
 
-        // A fetch on an empty consumer must terminate, not hang; race it against a
-        // wall-clock budget that returns -1 if the fetch hung.
+        // A fetch on an empty consumer (no idle heartbeat) must terminate instead
+        // of hanging. Race it against a generous wall-clock budget; if the budget
+        // wins (-1), the fetch hung.
         let count = try await withThrowingTaskGroup(of: Int.self) { group -> Int in
             group.addTask {
                 let batch = try await consumer.fetch(batch: 5, expires: 1)
@@ -457,7 +443,7 @@ class ConsumerTests: XCTestCase {
             group.cancelAll()
             return first
         }
-        XCTAssertEqual(count, 0, "empty fetch should return 0 messages (-1 means it hung)")
+        #expect(count == 0)
 
         // The consumer must still be usable after the empty fetch.
         _ = try await ctx.publish("foo.A", message: "hi".data(using: .utf8)!).wait()
@@ -467,12 +453,12 @@ class ConsumerTests: XCTestCase {
             try await msg.ack()
             got += 1
         }
-        XCTAssertEqual(got, 1)
+        #expect(got == 1)
 
         try await client.close()
     }
 
-    func testFetchCancellationTearsDownSubscription() async throws {
+    @Test func testFetchCancellationTearsDownSubscription() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -504,12 +490,12 @@ class ConsumerTests: XCTestCase {
             try await Task.sleep(nanoseconds: 100_000_000)
             count = client.connectionHandler?.subscriptionCount ?? -1
         }
-        XCTAssertEqual(count, baseline, "cancelled fetch leaked its inbox subscription")
+        #expect(count == baseline)
 
         try await client.close()
     }
 
-    func testFetchEarlyBreakTearsDownSubscription() async throws {
+    @Test(.timeLimit(.minutes(1))) func testFetchEarlyBreakTearsDownSubscription() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -529,8 +515,8 @@ class ConsumerTests: XCTestCase {
 
         let baseline = client.connectionHandler?.subscriptionCount ?? -1
 
-        // Consume one message then break out early. The fetch's inbox subscription
-        // must still be torn down, not leaked.
+        // Consume one message then break out early; the inbox subscription must still
+        // be torn down, not leaked.
         let batch = try await consumer.fetch(batch: 5, expires: 30)
         for try await msg in batch {
             try await msg.ack()
@@ -542,12 +528,12 @@ class ConsumerTests: XCTestCase {
             try await Task.sleep(nanoseconds: 100_000_000)
             count = client.connectionHandler?.subscriptionCount ?? -1
         }
-        XCTAssertEqual(count, baseline, "early-break fetch leaked its inbox subscription")
+        #expect(count == baseline, "early-break fetch leaked its inbox subscription")
 
         try await client.close()
     }
 
-    func testFetchCompletionTearsDownSubscription() async throws {
+    @Test(.timeLimit(.minutes(1))) func testFetchCompletionTearsDownSubscription() async throws {
         let bundle = Bundle.module
         natsServer.start(
             cfg: bundle.url(forResource: "jetstream", withExtension: "conf")!.relativePath)
@@ -567,21 +553,20 @@ class ConsumerTests: XCTestCase {
 
         let baseline = client.connectionHandler?.subscriptionCount ?? -1
 
-        // Consume the whole batch to completion.
         let batch = try await consumer.fetch(batch: 3, expires: 5)
         var got = 0
         for try await msg in batch {
             try await msg.ack()
             got += 1
         }
-        XCTAssertEqual(got, 3)
+        #expect(got == 3)
 
         var count = client.connectionHandler?.subscriptionCount ?? -1
         for _ in 0..<20 where count != baseline {
             try await Task.sleep(nanoseconds: 100_000_000)
             count = client.connectionHandler?.subscriptionCount ?? -1
         }
-        XCTAssertEqual(count, baseline, "completed fetch leaked its inbox subscription")
+        #expect(count == baseline, "completed fetch leaked its inbox subscription")
 
         try await client.close()
     }

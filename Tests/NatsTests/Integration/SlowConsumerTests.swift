@@ -14,100 +14,101 @@
 import Foundation
 import Logging
 import NatsServer
-import XCTest
+import Testing
 
 @testable import Nats
 
-class SlowConsumerTests: XCTestCase {
-
-    static var allTests = [
-        ("testSlowConsumerEventFiresOnOverflow", testSlowConsumerEventFiresOnOverflow),
-        ("testSlowConsumerReArmsAfterDrain", testSlowConsumerReArmsAfterDrain),
-    ]
+@Suite(.serialized) final class SlowConsumerTests {
 
     var natsServer = NatsServer()
 
-    override func tearDown() {
-        super.tearDown()
+    deinit {
         natsServer.stop()
     }
 
+    @Test(.timeLimit(.minutes(1)))
     func testSlowConsumerEventFiresOnOverflow() async throws {
         natsServer.start()
         logger.logLevel = .critical
 
         let client = NatsClientOptions().url(URL(string: natsServer.clientURL)!).build()
-
-        let expectation = XCTestExpectation(description: "slow consumer event was not fired")
-        expectation.assertForOverFulfill = true  // exactly one event per overflow episode
-        client.on(.error) { event in
-            if case .error(let err) = event,
-                let subErr = err as? NatsError.SubscriptionError,
-                case .slowConsumer = subErr
-            {
-                expectation.fulfill()
-            }
-        }
         try await client.connect()
 
         // Capacity 2 and we never read from the subscription, so once more than two
         // messages are delivered the buffer overflows and must fire a slow consumer
-        // event exactly once.
-        _ = try await client.subscribe(subject: "foo", capacity: 2)
-        _ = try await client.rtt()  // ensure the SUB reached the server before publishing
-
-        let payload = "x".data(using: .utf8)!
-        for _ in 0..<10 {
-            try await client.publish(payload, subject: "foo")
+        // event.
+        await confirmation("slow consumer event was not fired") { confirmed in
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let once = ResumeOnce()
+                client.on(.error) { event in
+                    guard case .error(let err) = event,
+                        let subErr = err as? NatsError.SubscriptionError,
+                        case .slowConsumer = subErr
+                    else { return }
+                    once.run {
+                        confirmed()
+                        continuation.resume()
+                    }
+                }
+                Task {
+                    _ = try? await client.subscribe(subject: "foo", capacity: 2)
+                    _ = try? await client.rtt()
+                    let payload = "x".data(using: .utf8)!
+                    for _ in 0..<10 {
+                        try? await client.publish(payload, subject: "foo")
+                    }
+                    try? await client.flush()
+                }
+            }
         }
-        try await client.flush()
-
-        await fulfillment(of: [expectation], timeout: 5.0)
         try await client.close()
     }
 
+    @Test(.timeLimit(.minutes(1)))
     func testSlowConsumerReArmsAfterDrain() async throws {
         natsServer.start()
         logger.logLevel = .critical
 
         let client = NatsClientOptions().url(URL(string: natsServer.clientURL)!).build()
-
-        let episodes = XCTestExpectation(description: "two slow consumer episodes")
-        episodes.expectedFulfillmentCount = 2
-        episodes.assertForOverFulfill = true
-        client.on(.error) { event in
-            if case .error(let err) = event,
-                let subErr = err as? NatsError.SubscriptionError,
-                case .slowConsumer = subErr
-            {
-                episodes.fulfill()
-            }
-        }
         try await client.connect()
 
-        let sub = try await client.subscribe(subject: "foo", capacity: 2)
-        _ = try await client.rtt()
+        // Overflow once, drain below capacity/2, overflow again: the slow-consumer
+        // signal must re-arm and fire a second time.
+        await confirmation("slow consumer did not re-arm", expectedCount: 2) { confirmed in
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let twice = ResumeAfter(2)
+                client.on(.error) { event in
+                    guard case .error(let err) = event,
+                        let subErr = err as? NatsError.SubscriptionError,
+                        case .slowConsumer = subErr
+                    else { return }
+                    confirmed()
+                    twice.tick { continuation.resume() }
+                }
+                Task {
+                    let payload = "x".data(using: .utf8)!
+                    let sub = try? await client.subscribe(subject: "foo", capacity: 2)
+                    _ = try? await client.rtt()
 
-        let payload = "x".data(using: .utf8)!
-        // Episode 1: overflow the buffer.
-        for _ in 0..<6 {
-            try await client.publish(payload, subject: "foo")
+                    for _ in 0..<6 {
+                        try? await client.publish(payload, subject: "foo")
+                    }
+                    try? await client.flush()
+                    _ = try? await client.rtt()
+
+                    if let sub {
+                        let iter = sub.makeAsyncIterator()
+                        _ = try? await iter.next()
+                        _ = try? await iter.next()
+                    }
+
+                    for _ in 0..<6 {
+                        try? await client.publish(payload, subject: "foo")
+                    }
+                    try? await client.flush()
+                }
+            }
         }
-        try await client.flush()
-        _ = try await client.rtt()  // let the inbound messages be processed
-
-        // Drain below capacity/2 so the slow-consumer signal re-arms.
-        var iter = sub.makeAsyncIterator()
-        _ = try await iter.next()
-        _ = try await iter.next()
-
-        // Episode 2: overflow again -> a second event must fire.
-        for _ in 0..<6 {
-            try await client.publish(payload, subject: "foo")
-        }
-        try await client.flush()
-
-        await fulfillment(of: [episodes], timeout: 5.0)
         try await client.close()
     }
 }

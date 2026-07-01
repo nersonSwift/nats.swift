@@ -21,7 +21,7 @@ jobs:
     - name: Build
       run: xcodebuild build -scheme Nats -destination 'platform=macOS,arch=arm64'
     - name: Test
-      run: swift test
+      run: swift test --no-parallel
   linux:
     runs-on: ubuntu-latest
     container: swift:6.2-noble
@@ -37,6 +37,8 @@ jobs:
         nats-server --version
     - name: Build
       run: swift build
+    - name: Test
+      run: swift test --no-parallel
   ios:
     runs-on: macos-15
     steps:

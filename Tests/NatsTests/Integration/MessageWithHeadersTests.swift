@@ -15,21 +15,17 @@ import Foundation
 import Logging
 import Nats
 import NatsServer
-import XCTest
+import Testing
 
-class TestMessageWithHeadersTests: XCTestCase {
-
-    static var allTests = [
-        ("testMessageWithHeaders", testMessageWithHeaders)
-    ]
+@Suite(.serialized) final class MessageWithHeadersTests {
 
     var natsServer = NatsServer()
 
-    override func tearDown() {
-        super.tearDown()
+    deinit {
         natsServer.stop()
     }
 
+    @Test(.timeLimit(.minutes(1)))
     func testMessageWithHeaders() async throws {
         natsServer.start()
         logger.logLevel = .critical
@@ -49,7 +45,7 @@ class TestMessageWithHeadersTests: XCTestCase {
 
         let iter = sub.makeAsyncIterator()
         let msg = try await iter.next()
-        XCTAssertEqual(msg!.headers, hm)
+        #expect(msg!.headers == hm)
 
     }
 }
