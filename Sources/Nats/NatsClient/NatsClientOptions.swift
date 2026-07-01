@@ -181,9 +181,7 @@ public class NatsClientOptions {
     }
 
     public func build() -> NatsClient {
-        let client = NatsClient()
-        client.inboxPrefix = inboxPrefix
-        client.connectionHandler = ConnectionHandler(
+        let connectionHandler = ConnectionHandler(
             urls: urls,
             reconnectWait: reconnectWait,
             maxReconnects: maxReconnects,
@@ -197,7 +195,7 @@ public class NatsClientOptions {
             rootCertificate: rootCertificate,
             retryOnFailedConnect: initialReconnect
         )
-        return client
+        return NatsClient(connectionHandler: connectionHandler, inboxPrefix: inboxPrefix)
     }
 
     private func applyDefaultPort(to url: URL) -> URL {

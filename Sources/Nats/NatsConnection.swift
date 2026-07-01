@@ -68,8 +68,45 @@ final class ConnectionHandler: ChannelInboundHandler, Sendable {
         state.withLockedValue { $0 }
     }
 
-    internal func setState(_ newState: NatsState) {
-        state.withLockedValue { $0 = newState }
+    internal func markClosed() {
+        state.withLockedValue { $0 = .closed }
+    }
+
+    internal enum ConnectGate {
+        case proceed
+        case alreadyConnected
+        case closed
+        case suspended
+    }
+
+    internal func beginConnect() -> ConnectGate {
+        state.withLockedValue { state -> ConnectGate in
+            switch state {
+            case .connected, .connecting: return .alreadyConnected
+            case .closed: return .closed
+            case .suspended: return .suspended
+            case .pending, .disconnected:
+                state = .connecting
+                return .proceed
+            }
+        }
+    }
+
+    @discardableResult
+    internal func setStateUnlessClosed(_ newState: NatsState) -> Bool {
+        state.withLockedValue { state -> Bool in
+            guard state != .closed else { return false }
+            state = newState
+            return true
+        }
+    }
+
+    internal func finishConnect() {
+        if setStateUnlessClosed(.connected) {
+            fire(.connected)
+        } else {
+            closeTransport()
+        }
     }
 
     private let subscriptionCounter = ManagedAtomic<UInt64>(0)
@@ -94,10 +131,13 @@ final class ConnectionHandler: ChannelInboundHandler, Sendable {
     }
     private let capturedConnectionError = NIOLockedValueBox<Error?>(nil)
 
-    private let _reconnectTask = NIOLockedValueBox<Task<(), Error>?>(nil)
-    private var reconnectTask: Task<(), Error>? {
-        get { _reconnectTask.withLockedValue { $0 } }
-        set { _reconnectTask.withLockedValue { $0 = newValue } }
+    private struct ReconnectSlot {
+        var task: Task<(), Never>?
+        var generation: UInt64 = 0
+    }
+    private let _reconnectSlot = NIOLockedValueBox(ReconnectSlot())
+    private var reconnectTask: Task<(), Never>? {
+        _reconnectSlot.withLockedValue { $0.task }
     }
 
     private let group: MultiThreadedEventLoopGroup
@@ -331,7 +371,7 @@ final class ConnectionHandler: ChannelInboundHandler, Sendable {
     }
 
     func connect() async throws {
-        self.setState(.connecting)
+        guard setStateUnlessClosed(.connecting) else { throw CancellationError() }
         var servers = self.urls
         if !self.retainServersOrder {
             servers = self.urls.shuffled()
@@ -370,7 +410,7 @@ final class ConnectionHandler: ChannelInboundHandler, Sendable {
             break
         }
         if let lastErr {
-            self.state.withLockedValue { $0 = .disconnected }
+            self.setStateUnlessClosed(.disconnected)
             switch lastErr {
             case let error as ChannelError:
                 serverInfoContinuation.withLockedValue { $0 = nil }
@@ -772,19 +812,18 @@ final class ConnectionHandler: ChannelInboundHandler, Sendable {
 
     func close() async throws {
         self.reconnectTask?.cancel()
-        try await self.reconnectTask?.value
+        await self.reconnectTask?.value
 
+        guard setStateUnlessClosed(.closed) else { return }
+
+        self.drainSubscriptions()
+        self.pingTask?.cancel()
         guard let eventLoop = self.channel?.eventLoop else {
-            self.state.withLockedValue { $0 = .closed }
-            self.pingTask?.cancel()
             self.fire(.closed)
             return
         }
         let promise = eventLoop.makePromise(of: Void.self)
-
         eventLoop.execute {
-            self.state.withLockedValue { $0 = .closed }
-            self.pingTask?.cancel()
             self.channel?.close(mode: .all, promise: promise)
         }
 
@@ -798,6 +837,40 @@ final class ConnectionHandler: ChannelInboundHandler, Sendable {
         self.fire(.closed)
     }
 
+    internal func releaseOnDeinit() {
+        self.markClosed()
+        self.reconnectTask?.cancel()
+        self.teardownClosed(fire: false)
+    }
+
+    private func teardownClosed(fire: Bool) {
+        self.drainSubscriptions()
+        self.closeTransport()
+        if fire { self.fire(.closed) }
+    }
+
+    private func closeTransport() {
+        self.pingTask?.cancel()
+        self.channel?.close(mode: .all, promise: nil)
+    }
+
+    private func closeTransportIfClosed() {
+        if state.withLockedValue({ $0 == .closed }) {
+            closeTransport()
+        }
+    }
+
+    private func drainSubscriptions() {
+        let subs = subscriptions.withLockedValue { subs -> [NatsSubscription] in
+            let all = Array(subs.values)
+            subs.removeAll()
+            return all
+        }
+        for sub in subs {
+            sub.complete()
+        }
+    }
+
     private func disconnect() async throws {
         self.pingTask?.cancel()
         try await self.channel?.close().get()
@@ -805,23 +878,33 @@ final class ConnectionHandler: ChannelInboundHandler, Sendable {
 
     func suspend() async throws {
         self.reconnectTask?.cancel()
-        _ = try await self.reconnectTask?.value
+        _ = await self.reconnectTask?.value
 
-        // Handle case where channel is already nil (e.g., during rapid reconnections)
         guard let eventLoop = self.channel?.eventLoop else {
-            // Set state to suspended even if channel is nil
-            self.state.withLockedValue { $0 = .suspended }
+            let action = self.state.withLockedValue { state -> (throwClosed: Bool, fire: Bool) in
+                switch state {
+                case .closed: return (throwClosed: true, fire: false)
+                case .suspended: return (throwClosed: false, fire: false)
+                default:
+                    state = .suspended
+                    return (throwClosed: false, fire: true)
+                }
+            }
+            if action.throwClosed { throw NatsError.ClientError.connectionClosed }
+            if action.fire { self.fire(.suspended) }
             return
         }
         let promise = eventLoop.makePromise(of: Void.self)
 
-        eventLoop.execute {  // This ensures the code block runs on the event loop
-            let shouldClose = self.state.withLockedValue { currentState in
-                let wasConnected = currentState == .connected
-                currentState = .suspended
+        let suspended = NIOLockedValueBox(false)
+        eventLoop.execute {
+            let shouldClose = self.state.withLockedValue { state -> Bool in
+                guard state != .closed, state != .suspended else { return false }
+                let wasConnected = state == .connected
+                state = .suspended
+                suspended.withLockedValue { $0 = true }
                 return wasConnected
             }
-
             if shouldClose {
                 self.pingTask?.cancel()
                 self.channel?.close(mode: .all, promise: promise)
@@ -831,7 +914,9 @@ final class ConnectionHandler: ChannelInboundHandler, Sendable {
         }
 
         try await promise.futureResult.get()
-        self.fire(.suspended)
+        if suspended.withLockedValue({ $0 }) {
+            self.fire(.suspended)
+        }
     }
 
     func resume() async throws {
@@ -937,7 +1022,7 @@ final class ConnectionHandler: ChannelInboundHandler, Sendable {
     }
 
     func handleDisconnect() {
-        state.withLockedValue { $0 = .disconnected }
+        guard setStateUnlessClosed(.disconnected) else { return }
         if let channel = self.channel {
             let promise = channel.eventLoop.makePromise(of: Void.self)
             Task {
@@ -965,59 +1050,67 @@ final class ConnectionHandler: ChannelInboundHandler, Sendable {
     }
 
     func handleReconnect() {
+        let started = _reconnectSlot.withLockedValue { slot -> Bool in
+            guard slot.task?.isCancelled ?? true else { return false }
+            slot.generation &+= 1
+            let generation = slot.generation
+            slot.task = Task {
+                await self.runReconnectLoop()
+                self.clearReconnectTask(ifGeneration: generation)
+            }
+            return true
+        }
+        if !started {
+            logger.debug("Reconnect already in progress. Ignoring duplicate trigger.")
+        }
+    }
 
-        let isAlreadyReconnecting = _reconnectTask.withLockedValue { task -> Bool in
-            guard let activeTask = task else { return false }
-            return !activeTask.isCancelled
+    private func clearReconnectTask(ifGeneration generation: UInt64) {
+        _reconnectSlot.withLockedValue { slot in
+            if slot.generation == generation {
+                slot.task = nil
+            }
+        }
+    }
+
+    private func runReconnectLoop() async {
+        var connected = false
+        while !Task.isCancelled
+            && (maxReconnects == nil || self.reconnectAttempts < maxReconnects!)
+        {
+            do {
+                try await self.connect()
+                connected = true
+                break  // Successfully connected
+            } catch is CancellationError {
+                logger.debug("Reconnect task cancelled")
+                self.closeTransportIfClosed()
+                return
+            } catch {
+                logger.debug("Could not reconnect: \(error)")
+                if !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: self.reconnectWait)
+                }
+            }
         }
 
-        guard !isAlreadyReconnecting else {
-            logger.debug("Reconnect already in progress. Ignoring duplicate trigger.")
+        // Early return if cancelled
+        if Task.isCancelled {
+            logger.debug("Reconnect task cancelled after connection attempts")
+            self.closeTransportIfClosed()
             return
         }
 
-        reconnectTask = Task {
+        // If we got here without connecting and weren't cancelled, we hit max reconnects
+        if !connected {
+            logger.error("Could not reconnect; maxReconnects exceeded")
+            self.markClosed()
+            self.teardownClosed(fire: true)
+            return
+        }
 
-            defer {
-                _reconnectTask.withLockedValue { $0 = nil }
-            }
-
-            var connected = false
-            while !Task.isCancelled
-                && (maxReconnects == nil || self.reconnectAttempts < maxReconnects!)
-            {
-                do {
-                    try await self.connect()
-                    connected = true
-                    break  // Successfully connected
-                } catch is CancellationError {
-                    logger.debug("Reconnect task cancelled")
-                    return
-                } catch {
-                    logger.debug("Could not reconnect: \(error)")
-                    if !Task.isCancelled {
-                        try await Task.sleep(nanoseconds: self.reconnectWait)
-                    }
-                }
-            }
-
-            // Early return if cancelled
-            if Task.isCancelled {
-                logger.debug("Reconnect task cancelled after connection attempts")
-                return
-            }
-
-            // If we got here without connecting and weren't cancelled, we hit max reconnects
-            if !connected {
-                logger.error("Could not reconnect; maxReconnects exceeded")
-                try await self.close()
-                return
-            }
-
-            self.channel?.eventLoop.execute {
-                self.state.withLockedValue { $0 = .connected }
-                self.fire(.connected)
-            }
+        self.channel?.eventLoop.execute {
+            self.finishConnect()
         }
     }
 

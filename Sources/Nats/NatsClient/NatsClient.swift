@@ -66,14 +66,25 @@ public struct Auth: Sendable {
     }
 }
 
-public class NatsClient {
+/// A NATS client. The client owns its connection: keep the client referenced for as
+/// long as the connection and its subscriptions are needed. Prefer an explicit
+/// ``close()``; as a leak backstop, releasing the last reference cancels any
+/// reconnect loop, completes all subscription iterators, and closes the transport
+/// without firing further events.
+public final class NatsClient: Sendable {
     public var connectedUrl: URL? {
         connectionHandler?.connectedUrl
     }
-    internal var connectionHandler: ConnectionHandler?
-    internal var inboxPrefix: String = "_INBOX."
+    internal let connectionHandler: ConnectionHandler?
+    internal let inboxPrefix: String
 
-    internal init() {
+    internal init(connectionHandler: ConnectionHandler? = nil, inboxPrefix: String = "_INBOX.") {
+        self.connectionHandler = connectionHandler
+        self.inboxPrefix = inboxPrefix
+    }
+
+    deinit {
+        connectionHandler?.releaseOnDeinit()
     }
 
     /// Returns a new inbox subject using the configured prefix and a generated NUID.
@@ -102,35 +113,27 @@ extension NatsClient {
             throw NatsError.ClientError.internalError("empty connection handler")
         }
 
-        // Check if already connected or in invalid state for connect()
-        let currentState = connectionHandler.currentState
-        switch currentState {
-        case .connected, .connecting:
+        switch connectionHandler.beginConnect() {
+        case .alreadyConnected:
             throw NatsError.ClientError.alreadyConnected
         case .closed:
             throw NatsError.ClientError.connectionClosed
         case .suspended:
             throw NatsError.ClientError.invalidConnection(
                 "connection is suspended, use resume() instead")
-        case .pending, .disconnected:
-            // These states allow connection/reconnection
+        case .proceed:
             break
         }
-
-        // Set state to connecting immediately to prevent concurrent connect() calls
-        connectionHandler.setState(.connecting)
 
         do {
             if !connectionHandler.retryOnFailedConnect {
                 try await connectionHandler.connect()
-                connectionHandler.setState(.connected)
-                connectionHandler.fire(.connected)
+                connectionHandler.finishConnect()
             } else {
                 connectionHandler.handleReconnect()
             }
         } catch {
-            // Reset state on connection failure
-            connectionHandler.setState(.disconnected)
+            connectionHandler.setStateUnlessClosed(.disconnected)
             throw error
         }
     }
