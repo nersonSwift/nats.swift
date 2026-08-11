@@ -38,9 +38,18 @@ public class NatsServer {
         }
     }
 
+    public var monitoringURL: String {
+        if let natsMonitoringPort {
+            return "http://localhost:\(natsMonitoringPort)"
+        } else {
+            return ""
+        }
+    }
+
     private var process: Process?
     private var natsServerPort: Int?
     private var natsWebsocketPort: Int?
+    private var natsMonitoringPort: Int?
     private var tlsEnabled = false
     private var pidFile: URL?
 
@@ -102,6 +111,10 @@ public class NatsServer {
                     self.natsWebsocketPort = port
                 }
 
+                if let port = self.extractMonitoringPort(from: line) {
+                    self.natsMonitoringPort = port
+                }
+
                 let ready = line.contains("Server is ready")
 
                 if !self.tlsEnabled && self.isTLS(from: line) {
@@ -155,6 +168,7 @@ public class NatsServer {
         }
         self.process = nil
         natsServerPort = port
+        natsMonitoringPort = nil
         tlsEnabled = false
     }
 
@@ -172,8 +186,15 @@ public class NatsServer {
     private func extractPort(from string: String, for phrase: String) -> Int? {
         // Listening for websocket clients on
         // Listening for client connections on
-        let pattern = "Listening for \(phrase) on .*?:(\\d+)$"
+        return extractPort(from: string, matching: "Listening for \(phrase) on .*?:(\\d+)$")
+    }
 
+    private func extractMonitoringPort(from string: String) -> Int? {
+        // Starting http monitor on 0.0.0.0:8222
+        return extractPort(from: string, matching: "Starting http monitor on .*?:(\\d+)$")
+    }
+
+    private func extractPort(from string: String, matching pattern: String) -> Int? {
         let regex = try! NSRegularExpression(pattern: pattern)
         let nsrange = NSRange(string.startIndex..<string.endIndex, in: string)
 

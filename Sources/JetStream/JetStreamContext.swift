@@ -72,7 +72,13 @@ extension JetStreamContext {
         // TODO(pp): add stream header options (expected seq etc)
         let inbox = client.newInbox()
         let sub = try await self.client.subscribe(subject: inbox)
-        try await self.client.publish(message, subject: subject, reply: inbox, headers: headers)
+        do {
+            try await sub.unsubscribe(after: 1)
+            try await self.client.publish(message, subject: subject, reply: inbox, headers: headers)
+        } catch {
+            await tearDownAckSubscription(sub)
+            throw error
+        }
         return AckFuture(sub: sub, timeout: self.timeout)
     }
 
@@ -129,10 +135,36 @@ public struct JetStreamAPIResponse: Codable {
     public let error: JetStreamError.APIError
 }
 
+/// Releases a publish ack inbox subscription, tolerating the two ways it can already be gone:
+/// the ack was delivered and `nextMessage` removed the subscription, or the connection closed.
+/// It never throws — a failed teardown must not displace the result of the publish it belongs to.
+private func tearDownAckSubscription(_ sub: NatsSubscription) async {
+    do {
+        try await sub.unsubscribe()
+    } catch NatsError.SubscriptionError.subscriptionClosed,
+        NatsError.ClientError.connectionClosed
+    {
+    } catch {
+        logger.error("error tearing down publish ack subscription: \(error)")
+    }
+}
+
 /// Used to await for response from ``JetStreamContext/publish(_:message:headers:)``
-public struct AckFuture {
+public final class AckFuture {
     let sub: NatsSubscription
     let timeout: TimeInterval
+    private var didTearDown = false
+
+    init(sub: NatsSubscription, timeout: TimeInterval) {
+        self.sub = sub
+        self.timeout = timeout
+    }
+
+    deinit {
+        if didTearDown { return }
+        let sub = self.sub
+        Task { await tearDownAckSubscription(sub) }
+    }
 
     /// Waits for an ACK from JetStream server.
     ///
@@ -140,30 +172,57 @@ public struct AckFuture {
     ///
     /// > **Throws:**
     /// > - ``JetStreamError/RequestError`` if the request timed out (client did not receive the ack in time) or
+    /// > - `CancellationError` if the awaiting task was cancelled before the ack arrived.
     public func wait() async throws -> Ack {
+        let result: Result<Ack, Error>
+        do {
+            result = .success(try await awaitAck())
+        } catch {
+            result = .failure(error)
+        }
+        await tearDownAckSubscription(sub)
+        didTearDown = true
+        return try result.get()
+    }
+
+    private enum AckWaitOutcome {
+        case reply(NatsMessage)
+        case subscriptionEnded
+        case timedOut
+    }
+
+    private func awaitAck() async throws -> Ack {
+        let sub = self.sub
+        let timeout = self.timeout
         let response = try await withThrowingTaskGroup(
-            of: NatsMessage?.self,
+            of: AckWaitOutcome.self,
             body: { group in
                 group.addTask {
-                    return try await sub.makeAsyncIterator().next()
+                    guard let msg = try await sub.makeAsyncIterator().next() else {
+                        return .subscriptionEnded
+                    }
+                    return .reply(msg)
                 }
 
                 // task for the timeout
                 group.addTask {
-                    try await Task.sleep(nanoseconds: UInt64(self.timeout * 1_000_000_000))
-                    return nil
+                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    return .timedOut
                 }
 
-                for try await result in group {
-                    // if the result is not empty, return it (or throw status error)
-                    if let msg = result {
+                for try await outcome in group {
+                    switch outcome {
+                    case .reply(let msg):
                         group.cancelAll()
                         return msg
-                    } else {
+                    case .timedOut:
                         group.cancelAll()
-                        try await sub.unsubscribe()
-                        // if result is empty, time out
                         throw JetStreamError.RequestError.timeout
+                    case .subscriptionEnded:
+                        let endedByCancellation = Task.isCancelled
+                        group.cancelAll()
+                        throw endedByCancellation
+                            ? CancellationError() : JetStreamError.RequestError.timeout
                     }
                 }
 
