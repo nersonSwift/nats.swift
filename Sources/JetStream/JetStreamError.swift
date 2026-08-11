@@ -839,16 +839,17 @@ public enum Response<T: Codable>: Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
 
-        // Try to decode the expected success type T first
-        if let successResponse = try? container.decode(T.self) {
-            self = .success(successResponse)
+        // An error reply must be recognised FIRST. A JetStream publish error ack
+        // carries `stream` and `seq: 0` alongside `error`, so it decodes cleanly
+        // as the success type and the rejection would be reported as an ack.
+        // Safe in this direction only: `JetStreamAPIResponse.error` is
+        // non-optional, so a success payload can never decode as an error.
+        if let errorResponse = try? container.decode(JetStreamAPIResponse.self) {
+            self = .error(errorResponse)
             return
         }
 
-        // If that fails, try to decode ErrorResponse
-        let errorResponse = try container.decode(JetStreamAPIResponse.self)
-        self = .error(errorResponse)
-        return
+        self = .success(try container.decode(T.self))
     }
 
     public func encode(to encoder: Encoder) throws {

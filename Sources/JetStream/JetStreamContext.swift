@@ -123,7 +123,9 @@ extension JetStreamContext {
 }
 
 public struct JetStreamAPIResponse: Codable {
-    public let type: String
+    /// Present on the stream/consumer API responses; a publish error ack carries
+    /// no `type`, so it is optional.
+    public let type: String?
     public let error: JetStreamError.APIError
 }
 
