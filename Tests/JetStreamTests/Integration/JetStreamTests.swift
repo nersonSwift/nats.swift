@@ -696,7 +696,6 @@ import Testing
         #expect(expectedConfig == cons.info.config)
 
         // get a non-existing consumer
-        errOk = false
         if let cons = try await stream.getConsumer(name: "bad") {
             Issue.record("Expected consumer not found, got: \(cons)")
         }
@@ -708,14 +707,16 @@ import Testing
 
         #expect(expectedConfig == cons.info.config)
 
-        // attempt to update illegal consumer property
+        // attempt to update illegal consumer property; nats-server 2.14 rejects a storage
+        // type change on an existing consumer, 2.10 accepts it
         cfg.memoryStorage = true
-        errOk = false
         do {
-            _ = try await stream.updateConsumer(cfg: cfg)
-        } catch JetStreamError.ConsumerError.invalidConfig(_) {
-            // success
-            errOk = true
+            let updated = try await stream.updateConsumer(cfg: cfg)
+            #expect(
+                updated.info.config.memoryStorage == true,
+                "Expected the accepted storage type change to be applied")
+        } catch let err as JetStreamError.APIError {
+            #expect(err.errorCode == ErrorCode.consumerCreate)
         }
 
         // attempt updating non-existing consumer
@@ -786,7 +787,6 @@ import Testing
         #expect(expectedConfig == cons.info.config)
 
         // get a non-existing consumer
-        errOk = false
         if let cons = try await ctx.getConsumer(stream: "test", name: "bad") {
             Issue.record("Expected consumer not found, got: \(cons)")
         }
@@ -798,14 +798,16 @@ import Testing
 
         #expect(expectedConfig == cons.info.config)
 
-        // attempt to update illegal consumer property
+        // attempt to update illegal consumer property; nats-server 2.14 rejects a storage
+        // type change on an existing consumer, 2.10 accepts it
         cfg.memoryStorage = true
-        errOk = false
         do {
-            _ = try await ctx.updateConsumer(stream: "test", cfg: cfg)
-        } catch JetStreamError.ConsumerError.invalidConfig(_) {
-            // success
-            errOk = true
+            let updated = try await ctx.updateConsumer(stream: "test", cfg: cfg)
+            #expect(
+                updated.info.config.memoryStorage == true,
+                "Expected the accepted storage type change to be applied")
+        } catch let err as JetStreamError.APIError {
+            #expect(err.errorCode == ErrorCode.consumerCreate)
         }
 
         // attempt updating non-existing consumer
@@ -998,13 +1000,27 @@ import Testing
         }
         #expect(i == 260)
 
-        // list consumers on non-existing stream
+        // list consumers on non-existing stream: the reply carries an error alongside an
+        // empty page, and an error reply is an error
         consumers = await ctx.consumers(stream: "bad")
-        i = 0
-        for try await _ in consumers {
-            i += 1
+        do {
+            for try await _ in consumers {
+                Issue.record("Expected stream not found, got a consumer")
+            }
+            Issue.record("Expected stream not found error")
+        } catch let err as JetStreamError.APIError {
+            #expect(err.errorCode == ErrorCode.streamNotFound)
         }
-        #expect(i == 0)
+
+        let badNames = await ctx.consumerNames(stream: "bad")
+        do {
+            for try await _ in badNames {
+                Issue.record("Expected stream not found, got a consumer name")
+            }
+            Issue.record("Expected stream not found error")
+        } catch let err as JetStreamError.APIError {
+            #expect(err.errorCode == ErrorCode.streamNotFound)
+        }
     }
 
 }

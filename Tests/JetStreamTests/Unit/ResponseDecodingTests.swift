@@ -19,14 +19,25 @@ import Testing
 /// Decoding contract for ``Response``, over payloads captured verbatim from a live
 /// `nats:2.10 -js` server.
 ///
-/// A JetStream publish error reply carries `stream` and `seq: 0` alongside `error`
-/// and carries no `type`, so it decodes cleanly as the success type ``Ack``. If the
-/// error branch is not recognised first, a rejected publish is reported to the
-/// caller as a successful ack.
+/// The branch is chosen by the presence of a non-null `error` key, never by which of the
+/// two types happens to decode. Both directions of that rule have a live payload behind
+/// them: a publish error reply carries `stream` and `seq: 0` alongside `error`, so it
+/// decodes cleanly as the success type ``Ack``; and the `CONSUMER.LIST` / `CONSUMER.NAMES`
+/// replies carry a complete, decodable payload alongside `error`.
 @Suite struct ResponseDecodingTests {
 
     private func decodeAck(_ json: String) throws -> Response<Ack> {
         try JSONDecoder().decode(Response<Ack>.self, from: Data(json.utf8))
+    }
+
+    /// Mirrors the private page type `Consumers` decodes `CONSUMER.LIST` into.
+    private struct ConsumersPage: Codable {
+        let total: Int
+        let consumers: [ConsumerInfo]?
+    }
+
+    private func decodeConsumersPage(_ json: String) throws -> Response<ConsumersPage> {
+        try JSONDecoder().decode(Response<ConsumersPage>.self, from: Data(json.utf8))
     }
 
     @Test func overQuotaPublishReplyDecodesAsError() throws {
@@ -65,6 +76,62 @@ import Testing
         }
         #expect(ack.seq == 2)
         #expect(ack.duplicate == true)
+    }
+
+    /// `CONSUMER.LIST` on a missing stream answers with an error *and* a fully decodable
+    /// page in one document — byte-identical on nats-server 2.10.22 and 2.14.4. The reply
+    /// carries an error, so it is an error, and listing consumers of a missing stream
+    /// throws instead of yielding an empty sequence.
+    @Test func consumerListReplyWithErrorDecodesAsError() throws {
+        let response = try decodeConsumersPage(
+            #"{"type":"io.nats.jetstream.api.v1.consumer_list_response","error":{"code":404,"err_code":10059,"description":"stream not found"},"total":0,"offset":0,"limit":0,"consumers":[]}"#
+        )
+
+        guard case .error(let apiResponse) = response else {
+            Issue.record("expected .error, got \(response)")
+            return
+        }
+        #expect(apiResponse.type == "io.nats.jetstream.api.v1.consumer_list_response")
+        #expect(apiResponse.error.code == 404)
+        #expect(apiResponse.error.errorCode == ErrorCode.streamNotFound)
+    }
+
+    @Test func consumerListReplyWithoutErrorDecodesAsSuccess() throws {
+        let response = try decodeConsumersPage(
+            #"{"type":"io.nats.jetstream.api.v1.consumer_list_response","total":0,"offset":0,"limit":0,"consumers":[]}"#
+        )
+
+        guard case .success(let page) = response else {
+            Issue.record("expected .success, got \(response)")
+            return
+        }
+        #expect(page.total == 0)
+        #expect(page.consumers?.isEmpty == true)
+    }
+
+    /// `error` is `omitempty` on the wire, so a null is not a shape the server sends — but
+    /// a null error is the absence of an error, and must never be read as one.
+    @Test func replyWithNullErrorDecodesAsSuccess() throws {
+        let response = try decodeConsumersPage(
+            #"{"type":"io.nats.jetstream.api.v1.consumer_list_response","error":null,"total":0,"offset":0,"limit":0,"consumers":[]}"#
+        )
+
+        guard case .success(let page) = response else {
+            Issue.record("expected .success, got \(response)")
+            return
+        }
+        #expect(page.consumers?.isEmpty == true)
+    }
+
+    /// The classification rule, pinned where the two candidate readings disagree: a reply
+    /// that carries an error the client cannot fully parse is still an error, and must be
+    /// refused rather than reported as a successful ack. `err_code` and `description` are
+    /// `omitempty` in the server's wire type, so an error object narrower than
+    /// ``JetStreamError/APIError`` is the shape this guards against.
+    @Test func replyWithUnparsableErrorIsNotReportedAsSuccess() throws {
+        #expect(throws: DecodingError.self) {
+            try decodeAck(#"{"error":{"code":503},"stream":"PROBE","seq":0}"#)
+        }
     }
 
     @Test func streamCreateResponseDecodesAsSuccess() throws {

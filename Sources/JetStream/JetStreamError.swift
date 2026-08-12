@@ -836,16 +836,25 @@ public enum Response<T: Codable>: Codable {
     case success(T)
     case error(JetStreamAPIResponse)
 
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
+    private enum ErrorKey: String, CodingKey {
+        case error
+    }
 
-        // An error reply must be recognised FIRST. A JetStream publish error ack
-        // carries `stream` and `seq: 0` alongside `error`, so it decodes cleanly
-        // as the success type and the rejection would be reported as an ack.
-        // Safe in this direction only: `JetStreamAPIResponse.error` is
-        // non-optional, so a success payload can never decode as an error.
-        if let errorResponse = try? container.decode(JetStreamAPIResponse.self) {
-            self = .error(errorResponse)
+    /// The branch is decided by the presence of a non-null `error` key, never by which of
+    /// the two types decodes first: the JetStream API answers with both at once. A publish
+    /// error ack carries `stream` and `seq: 0` alongside `error`, and a `CONSUMER.LIST` /
+    /// `CONSUMER.NAMES` reply carries a complete, decodable page alongside it — so either
+    /// order would classify one of the two by luck. A reply that carries an error is an error.
+    public init(from decoder: Decoder) throws {
+        let keyed = try? decoder.container(keyedBy: ErrorKey.self)
+        let carriesError =
+            try keyed.map { container in
+                try container.contains(.error) && !container.decodeNil(forKey: .error)
+            } ?? false
+
+        let container = try decoder.singleValueContainer()
+        if carriesError {
+            self = .error(try container.decode(JetStreamAPIResponse.self))
             return
         }
 
