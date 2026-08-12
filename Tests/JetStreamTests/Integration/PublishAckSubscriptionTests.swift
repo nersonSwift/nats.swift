@@ -19,10 +19,6 @@ import Testing
 @testable import JetStream
 @testable import Nats
 
-#if canImport(FoundationNetworking)
-    import FoundationNetworking
-#endif
-
 @Suite(.serialized) final class PublishAckSubscriptionTests {
 
     var natsServer = NatsServer()
@@ -161,7 +157,7 @@ import Testing
         let client = NatsClientOptions().url(try #require(URL(string: natsServer.clientURL)))
             .build()
         try await client.connect()
-        clientCID = try soleClientCID()
+        clientCID = try natsServer.soleClientConnection().cid
 
         let ctx = JetStreamContext(client: client)
         let stream = """
@@ -193,53 +189,10 @@ import Testing
 
     // MARK: - Monitoring endpoint
 
-    private struct Connz: Decodable {
-        let connections: [Conn]
-    }
-
-    private struct Conn: Decodable {
-        let cid: UInt64
-        let kind: String
-        let subscriptions: Int
-        /// Omitted by the server when the connection holds no subscriptions.
-        let subscriptionsList: [String]?
-
-        enum CodingKeys: String, CodingKey {
-            case cid
-            case kind
-            case subscriptions
-            case subscriptionsList = "subscriptions_list"
-        }
-    }
-
-    private struct UnexpectedConnzShape: Error, CustomStringConvertible {
-        let description: String
-    }
-
-    private func connz() throws -> Connz {
-        let url = try #require(URL(string: "\(natsServer.monitoringURL)/connz?subs=1"))
-        return try JSONDecoder().decode(Connz.self, from: try Data(contentsOf: url))
-    }
-
-    private func soleClientCID() throws -> UInt64 {
-        let clients = try connz().connections.filter { $0.kind == "Client" }
-        guard clients.count == 1 else {
-            throw UnexpectedConnzShape(
-                description: "expected exactly one client connection, got \(clients.count)")
-        }
-        return clients[0].cid
-    }
-
     /// The suite's own connection, addressed by `cid` so that a stray client reconnecting from
     /// another suite onto the same ephemeral port cannot be mistaken for it.
-    private func clientConnection() throws -> Conn {
-        let cid = try #require(clientCID)
-        let matches = try connz().connections.filter { $0.cid == cid }
-        guard matches.count == 1 else {
-            throw UnexpectedConnzShape(
-                description: "expected connection \(cid) in /connz, got \(matches.count)")
-        }
-        return matches[0]
+    private func clientConnection() throws -> NatsMonitoredConnection {
+        return try natsServer.monitoredConnection(cid: try #require(clientCID))
     }
 
     // MARK: - Polling

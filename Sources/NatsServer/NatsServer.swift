@@ -18,6 +18,30 @@ import XCTest
     import Glibc
 #endif
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+
+/// One connection as the server itself reports it on `/connz`.
+public struct NatsMonitoredConnection: Decodable {
+    public let cid: UInt64
+    public let kind: String
+    public let subscriptions: Int
+    /// Omitted by the server when the connection holds no subscriptions.
+    public let subscriptionsList: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case cid
+        case kind
+        case subscriptions
+        case subscriptionsList = "subscriptions_list"
+    }
+}
+
+public struct NatsMonitoringError: Error, CustomStringConvertible {
+    public let description: String
+}
+
 public class NatsServer {
     public var port: Int? { return natsServerPort }
     public var clientURL: String {
@@ -153,6 +177,43 @@ public class NatsServer {
             serverError, "error starting nats-server: \(serverError!)", file: file, line: line)
 
         self.process = process
+    }
+
+    /// The connections the server itself reports, with their subscription detail — the other
+    /// end of any assertion about a subscription's lifetime. Requires a configuration with a
+    /// monitoring port (`http_port: -1`).
+    public func monitoredConnections() throws -> [NatsMonitoredConnection] {
+        guard !monitoringURL.isEmpty, let url = URL(string: "\(monitoringURL)/connz?subs=1")
+        else {
+            throw NatsMonitoringError(
+                description: "the server was started without a monitoring port")
+        }
+        return try JSONDecoder().decode(Connz.self, from: try Data(contentsOf: url)).connections
+    }
+
+    /// The single client connection on the server, for a suite that connects exactly one.
+    public func soleClientConnection() throws -> NatsMonitoredConnection {
+        let clients = try monitoredConnections().filter { $0.kind == "Client" }
+        guard clients.count == 1 else {
+            throw NatsMonitoringError(
+                description: "expected exactly one client connection, got \(clients.count)")
+        }
+        return clients[0]
+    }
+
+    /// The connection with the given `cid`, so that a client reconnecting from another suite
+    /// onto the same ephemeral port cannot be mistaken for the one under test.
+    public func monitoredConnection(cid: UInt64) throws -> NatsMonitoredConnection {
+        let matches = try monitoredConnections().filter { $0.cid == cid }
+        guard matches.count == 1 else {
+            throw NatsMonitoringError(
+                description: "expected connection \(cid) in /connz, got \(matches.count)")
+        }
+        return matches[0]
+    }
+
+    private struct Connz: Decodable {
+        let connections: [NatsMonitoredConnection]
     }
 
     public func stop() {

@@ -14,13 +14,15 @@
 import Foundation
 import Logging
 import NIO
-import Nats
 import NatsServer
 import Testing
+
+@testable import Nats
 
 @Suite(.serialized) final class CoreNatsTests {
 
     var natsServer = NatsServer()
+    private var clientCID: UInt64?
 
     deinit {
         natsServer.stop()
@@ -860,7 +862,7 @@ import Testing
         Issue.record("Expected timeout")
     }
 
-    @Test func testRequest_permissionDenied() async throws {
+    @Test(.timeLimit(.minutes(1))) func testRequest_permissionDenied() async throws {
         logger.logLevel = .critical
         let bundle = Bundle.module
         let templateURL = bundle.url(forResource: "permissions", withExtension: "conf")!
@@ -871,15 +873,121 @@ import Testing
 
         let client = NatsClientOptions().url(URL(string: natsServer.clientURL)!).build()
         try await client.connect()
+        let handler = try #require(client.connectionHandler)
+        let baseline = handler.subscriptionCount
 
         do {
             _ = try await client.request("request".data(using: .utf8)!, subject: "service")
+            Issue.record("Expected permission denied")
         } catch NatsError.RequestError.permissionDenied {
-            try await client.close()
-            return
         }
 
-        Issue.record("Expected permission denied")
+        let settled = await settled(baseline) { handler.subscriptionCount }
+        #expect(settled == baseline, "the denied request left its inbox subscription behind")
+        try await client.close()
+    }
+
+    @Test(.timeLimit(.minutes(1))) func testRequest_releasesItsInbox() async throws {
+        let client = try await connectToMonitoredServer()
+        let handler = try #require(client.connectionHandler)
+
+        let service = try await client.subscribe(subject: "service")
+        let replying = Task {
+            for try await msg in service {
+                try await client.publish(
+                    "reply".data(using: .utf8)!, subject: try #require(msg.replySubject))
+            }
+        }
+        _ = try await client.rtt()
+        let baseline = try subscriptionCounts(handler)
+
+        for _ in 0..<20 {
+            _ = try await client.request("request".data(using: .utf8)!, subject: "service")
+        }
+
+        let settled = try await settled(baseline) { try subscriptionCounts(handler) }
+        #expect(settled.local == baseline.local, "requests leaked their inbox on the client")
+        #expect(settled.server == baseline.server, "requests leaked their inbox on the server")
+
+        replying.cancel()
+        try await service.unsubscribe()
+        try await client.close()
+    }
+
+    @Test(.timeLimit(.minutes(1))) func testRequest_cancelled() async throws {
+        let client = try await connectToMonitoredServer()
+        let handler = try #require(client.connectionHandler)
+
+        let service = try await client.subscribe(subject: "service")
+        _ = try await client.rtt()
+        let baseline = try subscriptionCounts(handler)
+
+        let cancellationsUntilBothTaskOrderingsAreSampled = 20
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        for _ in 0..<cancellationsUntilBothTaskOrderingsAreSampled {
+            let requesting = Task {
+                try await client.request(
+                    "request".data(using: .utf8)!, subject: "service", timeout: 30)
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+            requesting.cancel()
+            _ = try? await requesting.value
+        }
+
+        #expect(
+            ProcessInfo.processInfo.systemUptime - startedAt < 5,
+            "a cancelled request returned only after its 30s timeout elapsed")
+        let settled = try await settled(baseline) { try subscriptionCounts(handler) }
+        #expect(
+            settled.local == baseline.local,
+            "the cancelled request left its inbox subscription behind on the client")
+        #expect(
+            settled.server == baseline.server,
+            "the cancelled request left its inbox subscription behind on the server")
+
+        try await service.unsubscribe()
+        try await client.close()
+    }
+
+    /// Starts a server with a monitoring port and connects one client, remembering its `cid`:
+    /// the server's own subscription table is only readable per connection, and this suite
+    /// leaves clients of other tests reconnecting in the background.
+    private func connectToMonitoredServer() async throws -> NatsClient {
+        natsServer.start(
+            cfg: try #require(Bundle.module.url(forResource: "monitor", withExtension: "conf"))
+                .relativePath)
+        logger.logLevel = .critical
+        let client = NatsClientOptions().url(try #require(URL(string: natsServer.clientURL)))
+            .build()
+        try await client.connect()
+        clientCID = try natsServer.soleClientConnection().cid
+        return client
+    }
+
+    private struct SubscriptionCounts: Equatable {
+        let local: Int
+        let server: Int
+    }
+
+    private func subscriptionCounts(_ handler: ConnectionHandler) throws -> SubscriptionCounts {
+        let cid = try #require(clientCID)
+        return SubscriptionCounts(
+            local: handler.subscriptionCount,
+            server: try natsServer.monitoredConnection(cid: cid).subscriptions)
+    }
+
+    /// Re-reads `value` every 50ms until it equals `expected` or 5s elapse, then returns the
+    /// last read. Both the local map removal and the `UNSUB` write are asynchronous, so a
+    /// single read right after the call would be a race.
+    private func settled<T: Equatable>(
+        _ expected: T, value: () throws -> T
+    ) async rethrows -> T {
+        var current = try value()
+        for _ in 0..<100 where current != expected {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            current = try value()
+        }
+        return current
     }
 
     @Test func testPublishOnClosedConnection() async throws {

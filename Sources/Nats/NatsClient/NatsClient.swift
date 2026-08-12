@@ -252,44 +252,48 @@ extension NatsClient {
         let inbox = newInbox()
 
         let sub = try await connectionHandler.subscribe(inbox)
-        try await sub.unsubscribe(after: 1)
-        try await connectionHandler.write(
-            operation: ClientOp.publish((subject, inbox, payload, headers)))
+        do {
+            try await sub.unsubscribe(after: 1)
+            try await connectionHandler.write(
+                operation: ClientOp.publish((subject, inbox, payload, headers)))
 
-        return try await withThrowingTaskGroup(
-            of: NatsMessage?.self
-        ) { group in
-            group.addTask {
-                do {
-                    return try await sub.makeAsyncIterator().next()
-                } catch NatsError.SubscriptionError.permissionDenied {
-                    throw NatsError.RequestError.permissionDenied
-                }
-            }
-
-            // task for the timeout
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                return nil
-            }
-
-            for try await result in group {
-                // if the result is not empty, return it (or throw status error)
-                if let msg = result {
-                    group.cancelAll()
-                    if let status = msg.status, status == StatusCode.noResponders {
-                        throw NatsError.RequestError.noResponders
+            return try await withThrowingTaskGroup(
+                of: NatsMessage?.self
+            ) { group in
+                group.addTask {
+                    do {
+                        return try await sub.makeAsyncIterator().next()
+                    } catch NatsError.SubscriptionError.permissionDenied {
+                        throw NatsError.RequestError.permissionDenied
                     }
-                    return msg
-                } else {
-                    try await sub.unsubscribe()
-                    group.cancelAll()
-                    throw NatsError.RequestError.timeout
                 }
-            }
 
-            // this should not be reachable
-            throw NatsError.ClientError.internalError("error waiting for response")
+                // task for the timeout
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    return nil
+                }
+
+                for try await result in group {
+                    // if the result is not empty, return it (or throw status error)
+                    if let msg = result {
+                        group.cancelAll()
+                        if let status = msg.status, status == StatusCode.noResponders {
+                            throw NatsError.RequestError.noResponders
+                        }
+                        return msg
+                    } else {
+                        group.cancelAll()
+                        throw NatsError.RequestError.timeout
+                    }
+                }
+
+                // this should not be reachable
+                throw NatsError.ClientError.internalError("error waiting for response")
+            }
+        } catch {
+            await tearDownRequestSubscription(sub)
+            throw error
         }
     }
 
@@ -321,7 +325,7 @@ extension NatsClient {
     /// > - ``NatsError/SubscriptionError/invalidSubject`` if the provided subject is invalid.
     /// > - ``NatsError/SubscriptionError/invalidQueue`` if the provided queue group is invalid.
     public func subscribe(subject: String, queue: String? = nil) async throws -> NatsSubscription {
-        logger.info("subscribe to subject \(subject)")
+        logger.debug("subscribe to subject \(subject)")
         guard let connectionHandler = self.connectionHandler else {
             throw NatsError.ClientError.internalError("empty connection handler")
         }
@@ -360,5 +364,20 @@ extension NatsClient {
         let ping = RttCommand.makeFrom(channel: connectionHandler.channel)
         await connectionHandler.sendPing(ping)
         return try await ping.getRoundTripTime()
+    }
+}
+
+/// Releases a request inbox subscription nobody will ever read, tolerating the two ways it can
+/// already be gone: the reply was delivered and `nextMessage` removed the subscription, or the
+/// connection closed. It never throws — a failed teardown must not displace the error that
+/// caused it.
+private func tearDownRequestSubscription(_ sub: NatsSubscription) async {
+    do {
+        try await sub.unsubscribe()
+    } catch NatsError.SubscriptionError.subscriptionClosed,
+        NatsError.ClientError.connectionClosed
+    {
+    } catch {
+        logger.error("error tearing down request inbox subscription: \(error)")
     }
 }
