@@ -1180,17 +1180,20 @@ final class ConnectionHandler: ChannelInboundHandler, Sendable {
         return sub
     }
 
+    /// Sends `UNSUB` for a subscription.
+    ///
+    /// With `max` set and not yet delivered to the caller, the subscription stays registered so
+    /// the caller can still read the messages it is owed. Otherwise the subscription is released
+    /// locally whether or not the `UNSUB` reached the wire: a subscription its owner is done with
+    /// must not outlive the failed write and be re-registered by ``restoreSubscriptions()`` on the
+    /// next reconnect, where nothing would ever read it again.
     internal func unsubscribe(sub: NatsSubscription, max: UInt64?) async throws {
         if let max, sub.delivered < max {
-            // if max is set and the sub has not yet reached it, send unsub with max set
-            // and do not remove the sub from connection
             try await write(operation: ClientOp.unsubscribe((sid: sub.sid, max: max)))
             sub.max = max
         } else {
-            // if max is not set or the subscription received at least as many
-            // messages as max, send unsub command without max and remove sub from connection
+            defer { self.removeSub(sub: sub) }
             try await write(operation: ClientOp.unsubscribe((sid: sub.sid, max: nil)))
-            self.removeSub(sub: sub)
         }
     }
 
